@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-session-manager"
+version = "1.1.0"
+description = "管理 Claude Code 会话历史（~/.claude/projects）：列出、查看、删除、批量清理、回收站恢复、占用统计，带本地网页界面"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+dependencies = []
+
+[project.scripts]
+claude-session-manager = "session_manager.server:main"
+session-manager = "session_manager.core:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+session_manager = ["webui/*.html", "webui/vendor/*"]

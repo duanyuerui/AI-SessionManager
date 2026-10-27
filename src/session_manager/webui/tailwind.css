@@ -1,0 +1,283 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   主题变量（RGB 通道，配合 Tailwind 的 /透明度 修饰符）
+   ========================================================================== */
+@layer base {
+  :root {
+    --c-bg: 244 245 247;
+    --c-surface: 255 255 255;
+    --c-surface-2: 249 250 251;
+    --c-line: 229 231 235;
+    --c-line-strong: 203 208 215;
+    --c-ink: 17 24 39;
+    --c-ink-2: 55 65 81;
+    --c-muted: 107 114 128;
+    --c-faint: 148 155 165;
+    --c-accent: 185 84 53;
+    --c-accent-soft: 251 238 232;
+    --c-danger: 220 38 38;
+    --c-danger-soft: 254 242 242;
+    --c-success: 5 150 105;
+    --head-h: 92px;
+  }
+
+  html.dark {
+    --c-bg: 13 15 18;
+    --c-surface: 22 24 29;
+    --c-surface-2: 29 32 39;
+    --c-line: 38 42 50;
+    --c-line-strong: 56 62 73;
+    --c-ink: 232 234 237;
+    --c-ink-2: 196 200 206;
+    --c-muted: 150 156 165;
+    --c-faint: 108 114 122;
+    --c-accent: 224 142 111;
+    --c-accent-soft: 44 32 27;
+    --c-danger: 248 113 113;
+    --c-danger-soft: 45 24 24;
+    --c-success: 52 211 153;
+  }
+
+  html { color-scheme: light; }
+  html.dark { color-scheme: dark; }
+
+  body {
+    @apply bg-bg text-ink antialiased;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  ::selection { background: rgb(var(--c-accent) / 0.22); }
+
+  * { scrollbar-width: thin; scrollbar-color: rgb(var(--c-line-strong)) transparent; }
+  *::-webkit-scrollbar { width: 9px; height: 9px; }
+  *::-webkit-scrollbar-thumb {
+    background: rgb(var(--c-line-strong)); border-radius: 999px;
+    border: 2px solid transparent; background-clip: content-box;
+  }
+  *::-webkit-scrollbar-track { background: transparent; }
+
+  input[type="checkbox"] {
+    accent-color: rgb(var(--c-accent));
+    width: 14px; height: 14px; cursor: pointer;
+  }
+  input[type="checkbox"]:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+}
+
+/* ==========================================================================
+   组件
+   ========================================================================== */
+@layer components {
+  .card { @apply rounded-xl border border-line bg-surface shadow-card; }
+
+  .btn-primary {
+    @apply inline-flex h-8 shrink-0 select-none items-center justify-center gap-1.5 rounded-lg
+           bg-ink px-3 text-[12.5px] font-medium text-surface shadow-sm transition
+           hover:opacity-90 active:translate-y-px
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply inline-flex h-8 shrink-0 select-none items-center justify-center gap-1.5 rounded-lg
+           border border-line bg-surface px-2.5 text-[12.5px] font-medium text-ink-2 shadow-sm
+           transition hover:bg-surface-2 hover:text-ink active:translate-y-px
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-danger {
+    @apply inline-flex h-8 shrink-0 select-none items-center justify-center gap-1.5 rounded-lg
+           bg-danger px-3 text-[12.5px] font-medium text-white shadow-sm transition
+           hover:opacity-90 active:translate-y-px
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+  .btn-danger-ghost {
+    @apply inline-flex h-8 shrink-0 select-none items-center justify-center gap-1.5 rounded-lg
+           border border-danger/35 bg-transparent px-2.5 text-[12.5px] font-medium text-danger
+           transition hover:bg-danger-soft active:translate-y-px
+           disabled:pointer-events-none disabled:opacity-40;
+  }
+  .icon-btn {
+    @apply inline-grid h-7 w-7 shrink-0 place-items-center rounded-md text-faint
+           transition hover:bg-surface-2 hover:text-ink;
+  }
+
+  .field {
+    @apply h-8 w-full rounded-lg border border-line bg-surface px-2.5 text-[12.5px] text-ink
+           shadow-sm outline-none transition placeholder:text-faint
+           focus:border-accent focus:ring-2 focus:ring-accent/20;
+  }
+  select.field {
+    @apply cursor-pointer appearance-none pr-7;
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23949ba5' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.55rem center;
+  }
+
+  /* 标签页 */
+  .tab {
+    @apply inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px]
+           font-medium text-muted transition hover:bg-surface-2 hover:text-ink;
+  }
+  .tab.active { @apply bg-surface text-ink shadow-sm ring-1 ring-line; }
+  .tab svg { @apply h-3.5 w-3.5 opacity-60; }
+  .tab.active svg { @apply opacity-100; }
+  .tab-count {
+    @apply rounded-full bg-surface px-1.5 text-[10.5px] font-semibold tabular-nums
+           text-muted ring-1 ring-line;
+  }
+  .tab.active .tab-count { @apply bg-accent-soft text-accent ring-accent/25; }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-full bg-surface-2 px-1.5 py-0.5
+           text-[10.5px] font-medium text-muted ring-1 ring-inset ring-line;
+  }
+  .badge-live { @apply bg-accent-soft text-accent ring-accent/25; }
+
+  /* 表格 */
+  .data-table { @apply w-full table-fixed border-collapse text-left; }
+  .data-table td { @apply px-2.5 py-[7px] align-middle; }
+  .table-head th {
+    @apply sticky top-0 z-[2] whitespace-nowrap bg-surface-2 px-2.5 py-2
+           text-[10.5px] font-semibold uppercase tracking-wider text-faint;
+    box-shadow: inset 0 -1px 0 rgb(var(--c-line));
+  }
+  /* 表头排序：点一下按这列排，再点一下反向 */
+  .table-head th.sortable { cursor: pointer; user-select: none; transition: color 0.15s; }
+  .table-head th.sortable:hover { color: rgb(var(--c-ink-2)); }
+  .table-head .sort-ind {
+    display: inline-block; margin-left: 0.3rem; font-size: 10px; line-height: 1;
+    opacity: 0; transition: opacity 0.15s, transform 0.15s;
+  }
+  .table-head th.sortable:hover .sort-ind { opacity: 0.45; }
+  .table-head th[aria-sort="ascending"] .sort-ind,
+  .table-head th[aria-sort="descending"] .sort-ind {
+    opacity: 1; color: rgb(var(--c-accent));
+  }
+  .table-head th[aria-sort="descending"] .sort-ind { transform: rotate(180deg); }
+  .row { @apply border-t border-line transition-colors hover:bg-surface-2/70; }
+  .row.is-sel { @apply bg-accent-soft hover:bg-accent-soft; }
+  .row.is-live td:first-child { box-shadow: inset 2px 0 0 rgb(var(--c-accent)); }
+
+  .c-check { @apply w-[38px] pr-0; }
+  .c-time { @apply w-[106px] whitespace-nowrap text-[12px] tabular-nums text-muted; }
+  .c-size { @apply w-[72px] whitespace-nowrap text-right text-[12px] tabular-nums; }
+  .c-lines { @apply w-[62px] whitespace-nowrap text-right text-[12px] tabular-nums text-muted; }
+  .c-proj { @apply w-[190px] overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-muted; }
+  .c-act { @apply w-[112px] text-right; }
+
+  .rowact { @apply opacity-0 transition-opacity; }
+  .row:hover .rowact, .row:focus-within .rowact, .row.is-sel .rowact { @apply opacity-100; }
+  @media (hover: none) { .rowact { @apply opacity-100; } }
+
+  .row-btn {
+    @apply inline-flex h-6 items-center rounded-md border border-transparent px-1.5
+           text-[11.5px] font-medium text-muted transition
+           hover:border-line hover:bg-surface hover:text-ink;
+  }
+  .row-btn-danger { @apply text-danger/90 hover:border-danger/30 hover:bg-danger-soft hover:text-danger; }
+
+  .t-title {
+    @apply block cursor-pointer truncate text-[13.5px] font-medium text-ink transition-colors
+           hover:text-accent hover:underline hover:underline-offset-2;
+  }
+  .t-title.untitled { @apply font-normal text-muted; }
+
+  /* 弹窗 / 抽屉 / toast */
+  .toast {
+    @apply pointer-events-auto flex w-[320px] max-w-[calc(100vw-2rem)] items-start gap-2.5
+           rounded-xl border border-line bg-surface px-3 py-2.5 shadow-float animate-toast-in;
+  }
+  .toast-x {
+    @apply -mr-1 grid h-6 w-6 shrink-0 place-items-center rounded-md text-faint
+           transition hover:bg-surface-2 hover:text-ink;
+  }
+  .toast-out { animation: toast-out 0.15s ease-in forwards; }
+
+}
+
+/* ==========================================================================
+   工具 / 布局
+   ========================================================================== */
+@layer utilities {
+  .d-none { display: none !important; }
+}
+
+@layer base {
+  main { height: calc(100dvh - var(--head-h)); overflow-y: auto; }
+  #tab-sessions { height: 100%; }
+  #confirmModal { margin: auto; }
+  #confirmModal[open] { animation: dlg-in 0.16s ease-out; }
+  @keyframes dlg-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes toast-out {
+    to { opacity: 0; transform: translateY(6px); }
+  }
+}
+
+/* 小屏：精简表格列 */
+@media (max-width: 780px) {
+  .c-lines, .c-proj, .c-size { display: none; }
+  .c-time { width: 84px; font-size: 11.5px; }
+  .c-act { width: 58px; }
+  .row-btn { padding-left: 0.35rem; padding-right: 0.35rem; }
+}
+
+/* ==========================================================================
+   Tom Select（可搜索的项目下拉）
+   必须写在 @layer 之外：这些类名由 Tom Select 在运行时加到 DOM 上，
+   index.html 源码里并不出现，放进 layer 会被 Tailwind 当作未使用裁掉。
+   ========================================================================== */
+.ts-wrapper { @apply relative; }
+.ts-wrapper.single .ts-control {
+  @apply relative flex h-8 items-center gap-1 overflow-hidden rounded-lg border
+         border-line bg-surface pr-7 text-[12.5px] text-ink shadow-sm transition;
+  padding-left: 0.625rem;
+}
+/* 收起时的右侧小箭头 */
+.ts-wrapper.single .ts-control::after {
+  content: "";
+  position: absolute; right: 0.72rem; top: 50%; width: 7px; height: 7px;
+  border-right: 1.6px solid rgb(var(--c-faint));
+  border-bottom: 1.6px solid rgb(var(--c-faint));
+  transform: translateY(-70%) rotate(45deg);
+  transition: transform 0.15s;
+  pointer-events: none;
+}
+.ts-wrapper.single.dropdown-active .ts-control::after { transform: translateY(-30%) rotate(-135deg); }
+.ts-wrapper.focus .ts-control { @apply border-accent ring-2 ring-accent/20; }
+.ts-control > input {
+  @apply min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none
+         placeholder:text-faint;
+}
+/* 选中后输入框要藏起来，否则会和已选项叠成两行 */
+.ts-wrapper.single.input-hidden .ts-control > input {
+  position: absolute; left: -10000px; width: 1px; opacity: 0;
+}
+.ts-control .item { @apply min-w-0 truncate; }
+.ts-control .clear-button {
+  @apply absolute right-6 top-1/2 grid h-4 w-4 -translate-y-1/2 cursor-pointer
+         place-items-center rounded-full text-[13px] leading-none text-faint opacity-0
+         transition hover:bg-surface-2 hover:text-ink;
+}
+.ts-wrapper:hover .clear-button, .ts-wrapper.focus .clear-button { @apply opacity-100; }
+.ts-dropdown {
+  @apply absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-auto rounded-lg
+         border border-line bg-surface py-1 shadow-float;
+}
+.ts-dropdown [data-selectable] {
+  @apply cursor-pointer truncate bg-transparent px-2.5 py-1.5 text-[12.5px] text-ink-2;
+}
+.ts-dropdown [data-selectable].active { @apply bg-surface-2 text-ink; }
+.ts-dropdown [data-selectable].selected { @apply font-semibold text-accent; }
+.ts-dropdown .no-results { @apply px-2.5 py-2 text-[12px] text-faint; }
+.ts-hidden-accessible {
+  position: absolute !important; width: 1px !important; height: 1px !important;
+  padding: 0 !important; margin: -1px !important; overflow: hidden !important;
+  clip: rect(0 0 0 0) !important; clip-path: inset(50%) !important;
+  border: 0 !important; white-space: nowrap !important;
+}
