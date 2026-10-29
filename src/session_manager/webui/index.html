@@ -203,11 +203,11 @@
                 <thead class="table-head">
                   <tr>
                     <th class="c-check"><input type="checkbox" id="selAll" title="全选"></th>
-                    <th class="c-time">最后活动</th>
-                    <th class="c-tokens">Token</th>
-                    <th class="c-size">大小</th>
-                    <th class="c-proj">项目</th>
-                    <th>标题</th>
+                    <th class="c-time sortable" data-sort="time" aria-sort="descending" title="点击排序，再点反向">最后活动<span class="sort-ind">↑</span></th>
+                    <th class="c-tokens sortable" data-sort="tokens" aria-sort="none" title="点击排序，再点反向">Token<span class="sort-ind">↑</span></th>
+                    <th class="c-size sortable" data-sort="size" aria-sort="none" title="点击排序，再点反向">大小<span class="sort-ind">↑</span></th>
+                    <th class="c-proj sortable" data-sort="project" aria-sort="none" title="点击排序，再点反向">项目<span class="sort-ind">↑</span></th>
+                    <th class="sortable" data-sort="title" aria-sort="none" title="点击排序，再点反向">标题<span class="sort-ind">↑</span></th>
                     <th class="c-act"></th>
                   </tr>
                 </thead>
@@ -445,6 +445,7 @@
     period: "day",
     range: 30,
     sort: "time",
+    sortDir: -1,
     busy: false,
     autoSec: 30,
   };
@@ -691,7 +692,9 @@
     setTab("sessions", false);
     showView("tool");
     state.sort = "time";
+    state.sortDir = -1;
     $("sort").value = "time";
+    syncSortUi();
     $("q").value = "";
     $("untitledOnly").checked = false;
     tsProj.setValue("", true);
@@ -1263,6 +1266,51 @@
     renderSessions();
   }
 
+  // 表头排序：点击切换升降序（文字列默认升序，时间/数值默认降序）
+  const TEXT_SORTS = new Set(["title", "project"]);
+  const SORT_VALUE = {
+    time: (s) => s.mtime || 0,
+    tokens: (s) => totalOf(s.tokens || {}),
+    size: (s) => s.size || 0,
+    project: (s) => (s.project || "").toLowerCase(),
+    title: (s) => (s.title || "").toLowerCase(),
+  };
+
+  function applySort() {
+    const key = SORT_VALUE[state.sort] ? state.sort : "time";
+    const dir = state.sortDir > 0 ? 1 : -1;
+    const val = SORT_VALUE[key];
+    const text = TEXT_SORTS.has(key);
+    state.sessions.sort((a, b) => {
+      const va = val(a), vb = val(b);
+      const c = text ? String(va).localeCompare(String(vb), "zh-CN") : va - vb;
+      if (c) return c * dir;
+      return (b.mtime || 0) - (a.mtime || 0);
+    });
+    syncSortUi();
+  }
+
+  function syncSortUi() {
+    document.querySelectorAll("#tab-sessions thead th[data-sort]").forEach((th) => {
+      const on = th.getAttribute("data-sort") === state.sort;
+      th.setAttribute("aria-sort",
+        on ? (state.sortDir > 0 ? "ascending" : "descending") : "none");
+    });
+    const sel = $("sort");
+    if ([...sel.options].some((o) => o.value === state.sort)) sel.value = state.sort;
+  }
+
+  function changeSort(key) {
+    if (state.sort === key) {
+      state.sortDir = -state.sortDir;
+    } else {
+      state.sort = key;
+      state.sortDir = TEXT_SORTS.has(key) ? 1 : -1;
+    }
+    applySort();
+    renderSessions();
+  }
+
   async function loadSessions() {
     if (!state.tool) return;
     const params = new URLSearchParams({
@@ -1275,6 +1323,7 @@
     try {
       const data = await api("/api/sessions?" + params);
       state.sessions = data.sessions;
+      applySort();
       state.lastIdx = null;
       const ids = new Set(state.sessions.map((s) => s.id));
       for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
@@ -1618,7 +1667,16 @@
     qTimer = setTimeout(loadSessions, 220);
   });
   $("proj").addEventListener("change", loadSessions);
-  $("sort").addEventListener("change", () => { state.sort = $("sort").value; loadSessions(); });
+  $("sort").addEventListener("change", () => {
+    state.sort = $("sort").value;
+    state.sortDir = TEXT_SORTS.has(state.sort) ? 1 : -1;
+    applySort();
+    renderSessions();
+  });
+  // 点表头排序，再点同一列反向
+  document.querySelectorAll("#tab-sessions thead th[data-sort]").forEach((th) => {
+    th.addEventListener("click", () => changeSort(th.getAttribute("data-sort")));
+  });
   $("untitledOnly").addEventListener("change", loadSessions);
 
   $("rows").addEventListener("click", (e) => {
