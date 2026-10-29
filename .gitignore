@@ -12,3 +12,7 @@ dist/
 # 编辑器
 .vscode/
 .idea/
+
+# 本地界面截图 / Playwright
+.playwright-mcp/
+/*.png

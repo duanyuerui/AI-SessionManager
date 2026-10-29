@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""ClaudeSessionManager 的本地网页服务。
+"""AISessionManager（原 ClaudeSessionManager）的本地网页服务。
+
+统一管理 Claude Code / Codex / DSH / WorkBuddy / ZCode 的会话：
+    列出 / 详情 / 删除（回收站）/ 恢复 / 批量清理 / 占用统计 / Token 工作台
 
 用法:
     python run.py                   # 启动并自动打开浏览器
     python -m session_manager web   # 同上（命令行入口）
-    python run.py --port 8899 --no-browser
 
-只监听 127.0.0.1，不对外网开放。删除默认进回收站，可恢复。
+只监听 127.0.0.1，不对外网开放。
 """
 from __future__ import annotations
 
@@ -14,7 +16,10 @@ import argparse
 import json
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
+import threading
 import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,10 +29,17 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-try:  # 作为包的一部分（python -m session_manager / 打包后的 exe）
+try:
     from . import core as sm
+    from . import providers
+    from . import usage as usage_mod
+    from .providers.base import bucket_total, human_size, session_json, short_path
 except ImportError:  # 直接运行本文件
     import core as sm  # type: ignore
+    import providers  # type: ignore
+    import usage as usage_mod  # type: ignore
+    from providers.base import (bucket_total, human_size, session_json,  # type: ignore
+                                short_path)
 
 
 def _webui_root():
@@ -44,279 +56,276 @@ WEBUI = _webui_root()
 UI_FILE = os.path.join(WEBUI, "index.html")
 VENDOR = os.path.join(WEBUI, "vendor")
 STATIC_TYPES = {".css": "text/css; charset=utf-8",
-                ".js": "application/javascript; charset=utf-8"}
+                ".js": "application/javascript; charset=utf-8",
+                ".svg": "image/svg+xml"}
 
-ROOT = os.path.join(sm.HOME, ".claude")
-_LINES = {}
-
-
-# ---------- 公共 ----------
-
-def ns(root=None, **kw):
-    a = argparse.Namespace(
-        root=root, project=None, here=False, sort="time", limit=0,
-        force=False, purge=False, y=True, dry_run=False,
-        older_than=None, bigger_than=None, keep_last=0,
-    )
-    for k, v in kw.items():
-        setattr(a, k, v)
-    return a
+ROOT = os.path.join(sm.HOME, ".claude")  # 兼容旧入口：只影响 Claude
+_TOOLS_TTL = 4.0
+_tools_cache = {"at": 0.0, "data": None}
+_tools_lock = threading.Lock()
+_clean_lock = threading.Lock()
 
 
-def lines_of(s, compute=True):
-    key = (s["path"], s["size"], s["mtime"])
-    if key in _LINES:
-        return _LINES[key]
-    if not compute:
-        return None
+def provider(key, root=None):
     try:
-        n = sm.count_lines(s["path"])
-    except OSError:
-        return None
-    if len(_LINES) > 5000:
-        _LINES.clear()
-    _LINES[key] = n
-    return n
+        p = providers.get_provider(key)
+    except KeyError as e:
+        raise ValueError(str(e))
+    if p.key == "claude":
+        if root:
+            p._root = os.path.abspath(os.path.expanduser(root))
+        elif not os.environ.get("AISM_CLAUDE_ROOT"):
+            p._root = ROOT
+    return p
 
 
-def project_label(s):
-    return s["cwd"] or s["project_dir"]
+def _installed_providers():
+    out = []
+    for key in providers.keys():
+        p = provider(key)
+        if p.available():
+            out.append(p)
+    return out
 
 
-def session_json(s, compute_lines=True):
-    return {
-        "id": s["session_id"],
-        "title": s["title"] or "",
-        "project": project_label(s),
-        "project_short": sm.short_path(project_label(s), 2),
-        "size": s["size"],
-        "size_str": sm.human_size(s["size"]),
-        "mtime": s["mtime"],
-        "mtime_str": sm.fmt_mtime(s["mtime"]),
-        "lines": lines_of(s, compute_lines),
-        "live": bool(sm.current_sid()) and s["session_id"] == sm.current_sid(),
-        "untitled": not s["title"],
+# ---------- 汇总 ----------
+
+def tools_json(root=None, scan=False):
+    if scan:
+        providers.all_providers(force=True)
+        invalidate_tools()
+    with _tools_lock:
+        if _tools_cache["data"] and time.time() - _tools_cache["at"] < _TOOLS_TTL:
+            return _tools_cache["data"]
+    cache = usage_mod.load_cache()
+    items = []
+    for key in providers.keys():
+        p = provider(key, root)
+        installed = p.available()
+        row = {
+            "key": p.key, "name": p.name, "color": p.color,
+            "hint": p.hint, "root": p.root, "installed": installed,
+            "kind": p.kind,
+            "primary": p.key in providers.PRIMARY_KEYS,
+            "readonly": bool(getattr(p, "readonly", False)),
+            "via": getattr(p, "via", ""),
+            "empty": bool(getattr(p, "empty", False)),
+            "sessions": 0, "size": 0, "size_str": "0B",
+            "tokens": None, "models": [],
+        }
+        if installed:
+            try:
+                n, size = p.quick_stats()
+                row["sessions"] = int(n or 0)
+                row["size"] = int(size or 0)
+                row["size_str"] = human_size(size or 0)
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                qu = p.quick_usage(cache)
+            except Exception:  # noqa: BLE001
+                qu = {"total": 0, "models": {}}
+            if qu["total"]:
+                row["tokens"] = qu["totals"]
+                row["models"] = [{"model": m, "tokens": t}
+                                 for m, t in sorted(qu["models"].items(),
+                                                    key=lambda kv: -kv[1])][:6]
+        items.append(row)
+    data = {
+        "tools": items,
+        "live_id": sm.current_sid(),
+        "cache_dir": usage_mod.cache_dir(),
+        "cache_file": usage_mod.cache_path(),
     }
+    with _tools_lock:
+        _tools_cache["at"] = time.time()
+        _tools_cache["data"] = data
+    return data
 
 
-def scan_sessions(root, project=None):
-    return sm.scan(ns(root), project=project or None)
+def invalidate_tools():
+    with _tools_lock:
+        _tools_cache["data"] = None
 
 
-def filter_rows(rows, q="", project="", untitled=False):
+def filter_sessions(rows, q="", project="", untitled=False):
     q = (q or "").strip().lower()
     out = []
     for s in rows:
-        if untitled and s["title"]:
+        title = s.get("title") or ""
+        if untitled and title:
             continue
-        if project and not sm.match_project(s, project):
-            continue
+        if project:
+            hay = "%s %s" % (s.get("project") or "", s.get("cwd") or "")
+            if project.lower() not in hay.lower():
+                continue
         if q:
-            hay = " ".join([s["title"] or "", project_label(s), s["session_id"]]).lower()
+            hay = " ".join([title, s.get("project") or "", s.get("cwd") or "",
+                            s.get("id") or ""]).lower()
             if q not in hay:
                 continue
         out.append(s)
     return out
 
 
-# ---------- 操作 ----------
-
-def delete_sessions(root, ids, purge=False, force=False):
-    """按完整会话 ID 删除。返回 JSON 友好的结果。"""
-    rows = scan_sessions(root)
-    by_id = {s["session_id"]: s for s in rows}
-    cur = sm.current_sid()
-    out = {"deleted": [], "skipped_live": [], "errors": [], "freed": 0, "purge": purge}
-    targets = []
-    for sid in ids:
-        s = by_id.get(str(sid))
-        if not s:
-            out["errors"].append("未找到会话 %s" % str(sid)[:8])
-            continue
-        if sid == cur and not force:
-            out["skipped_live"].append(sid)
-            continue
-        targets.append(s)
-    if not targets:
-        return out
-    troot = sm.trash_root(ns(root))
-    if not purge:
-        os.makedirs(troot, exist_ok=True)
-    stamp = time.strftime("%Y%m%d-%H%M%S")
-    for s in targets:
-        try:
-            if purge:
-                os.remove(s["path"])
-            else:
-                dest = os.path.join(troot, "%s_%s.jsonl" % (stamp, s["session_id"]))
-                shutil.move(s["path"], dest)
-                meta = {
-                    "session_id": s["session_id"],
-                    "original_path": s["path"],
-                    "cwd": s["cwd"],
-                    "title": s["title"],
-                    "deleted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                }
-                with open(dest + sm.META_SUFFIX, "w", encoding="utf-8") as f:
-                    json.dump(meta, f, ensure_ascii=False, indent=2)
-            out["deleted"].append({"id": s["session_id"],
-                                   "title": s["title"] or "(无标题)"})
-            out["freed"] += s["size"]
-        except OSError as e:
-            out["errors"].append("%s: %s（可能正被其他 Claude 窗口占用）"
-                                 % (s["title"] or s["session_id"][:8], e))
-    out["freed_str"] = sm.human_size(out["freed"])
-    return out
+def sort_sessions(rows, sort="time"):
+    if sort == "size":
+        rows.sort(key=lambda s: (-(s.get("size") or 0), -(s.get("mtime") or 0)))
+    elif sort == "tokens":
+        rows.sort(key=lambda s: (-bucket_total(s.get("tokens") or {}),
+                                 -(s.get("mtime") or 0)))
+    elif sort == "title":
+        rows.sort(key=lambda s: (s.get("title") or "").lower())
+    elif sort == "project":
+        rows.sort(key=lambda s: ((s.get("project") or "").lower(),
+                                 -(s.get("mtime") or 0)))
+    else:
+        rows.sort(key=lambda s: (-(s.get("mtime") or 0), s.get("id") or ""))
+    return rows
 
 
-def trash_json(root):
+def sessions_json(key, root=None, q="", project="", untitled=False, sort="time"):
+    p = provider(key, root)
+    if not p.available():
+        return {"tool": _tool_meta(p), "sessions": [], "total": 0,
+                "total_size": 0, "total_size_str": "0B", "installed": False}
+    rows = p.sessions()
+    rows = filter_sessions(rows, q, project, untitled)
+    sort_sessions(rows, sort)
+    total_size = sum(s.get("size") or 0 for s in rows)
+    total_tokens = sum(bucket_total(s.get("tokens") or {}) for s in rows)
+    projects = sorted({(s.get("project") or "") for s in rows if s.get("project")})
+    return {
+        "tool": _tool_meta(p),
+        "installed": True,
+        "total": len(rows),
+        "total_size": total_size,
+        "total_size_str": human_size(total_size),
+        "total_tokens": total_tokens,
+        "projects": projects,
+        "sessions": [session_json(s) for s in rows],
+        "live_id": p.live_id(),
+    }
+
+
+def _tool_meta(p):
+    return {"key": p.key, "name": p.name, "color": p.color,
+            "root": p.root, "installed": p.available(), "kind": p.kind,
+            "primary": p.key in providers.PRIMARY_KEYS,
+            "readonly": bool(getattr(p, "readonly", False)),
+            "empty": bool(getattr(p, "empty", False)),
+            "via": getattr(p, "via", "")}
+
+
+def show_json(key, sid, root=None):
+    p = provider(key, root)
+    s = p.get(sid)
+    if not s:
+        raise ValueError("未找到会话")
+    d = session_json(s)
+    try:
+        info = p.detail(s) or {}
+    except Exception as e:  # noqa: BLE001
+        info = {"error": "%s: %s" % (type(e).__name__, e)}
+    d.update(info)
+    d["resume"] = p.resume_cmd(s)
+    d["tool_name"] = p.name
+    d["tool_color"] = p.color
+    return d
+
+
+def trash_json(key, root=None):
+    p = provider(key, root)
+    items = p.trash_list() if p.available() else []
+    total = sum(i.get("size") or 0 for i in items)
+    return {"tool": _tool_meta(p), "items": items,
+            "total_size": total, "total_size_str": human_size(total)}
+
+
+def stats_json(key, root=None):
+    p = provider(key, root)
+    if not p.available():
+        return {"tool": _tool_meta(p), "groups": [], "total": 0, "total_size": 0,
+                "total_size_str": "0B", "trash_count": 0, "trash_size_str": "0B"}
+    rows = p.sessions()
+    groups = {}
+    for s in rows:
+        groups.setdefault(s.get("project") or "(未知项目)", []).append(s)
     items = []
-    for e in sm.trash_entries(ns(root)):
-        m = e.get("meta") or {}
+    for name, lst in sorted(groups.items(),
+                            key=lambda kv: -sum(x.get("size") or 0 for x in kv[1])):
+        size = sum(x.get("size") or 0 for x in lst)
+        latest = max((x.get("mtime") or 0) for x in lst)
         items.append({
-            "name": os.path.basename(e["path"]),
-            "id": m.get("session_id") or "",
-            "title": m.get("title") or "",
-            "deleted_at": m.get("deleted_at") or sm.fmt_mtime(e["mtime"]),
-            "original_path": m.get("original_path") or "",
-            "project_short": sm.short_path(os.path.dirname(m.get("original_path") or ""), 2),
-            "size": e["size"],
-            "size_str": sm.human_size(e["size"]),
+            "project": name, "project_short": short_path(name, 3),
+            "count": len(lst), "size": size, "size_str": human_size(size),
+            "tokens": sum(bucket_total(x.get("tokens") or {}) for x in lst),
+            "latest": latest,
+            "latest_str": sm.fmt_mtime(latest) if latest else "",
+            "live": any(x.get("live") for x in lst),
         })
-    return items
+    trash = p.trash_list() if p.available() else []
+    total = sum(r.get("size") or 0 for r in rows)
+    return {
+        "tool": _tool_meta(p), "groups": items,
+        "total": len(rows), "total_size": total,
+        "total_size_str": human_size(total),
+        "trash_count": len(trash),
+        "trash_size_str": human_size(sum(t.get("size") or 0 for t in trash)),
+    }
 
 
-def restore_entries(root, names):
-    wanted = set(names or [])
-    out = {"restored": [], "errors": []}
-    for e in sm.trash_entries(ns(root)):
-        if os.path.basename(e["path"]) not in wanted:
-            continue
-        dest = (e.get("meta") or {}).get("original_path")
-        if not dest:
-            out["errors"].append("缺少原始路径，无法恢复")
-            continue
-        if os.path.exists(dest):
-            stem, ext = os.path.splitext(dest)
-            dest = "%s_restored%s" % (stem, ext)
-        try:
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            shutil.move(e["path"], dest)
-            meta_path = e["path"] + sm.META_SUFFIX
-            if os.path.exists(meta_path):
-                os.remove(meta_path)
-            out["restored"].append(os.path.basename(dest))
-        except OSError as ex:
-            out["errors"].append("%s: %s" % (os.path.basename(e["path"]), ex))
-    return out
-
-
-def empty_trash(root):
-    out = {"removed": 0, "freed": 0, "freed_str": "", "errors": []}
-    for e in sm.trash_entries(ns(root)):
-        for p in (e["path"], e["path"] + sm.META_SUFFIX):
-            if not os.path.exists(p):
-                continue
-            try:
-                os.remove(p)
-                out["removed"] += 1
-                if p == e["path"]:
-                    out["freed"] += e["size"]
-            except OSError as ex:
-                out["errors"].append("%s: %s" % (os.path.basename(p), ex))
-    out["freed_str"] = sm.human_size(out["freed"])
-    return out
-
-
-def clean_candidates(root, body):
-    rows = scan_sessions(root, project=body.get("project") or None)
+def clean_candidates(key, body, root=None):
+    p = provider(key, root)
+    rows = p.sessions() if p.available() else []
     days = float(body.get("older_days") or 0)
     bigger_mb = float(body.get("bigger_mb") or 0)
     keepn = int(body.get("keep_last") or 0)
+    project = body.get("project") or ""
     if not (days or bigger_mb or keepn):
         raise ValueError("至少设置一个条件（天数 / 大小 / 每项目保留数）")
+    if project:
+        rows = [s for s in rows if project.lower() in (s.get("project") or "").lower()]
     now = time.time()
-    protected = {sm.current_sid()}
+    protected = {p.live_id()}
     if keepn:
         byproj = {}
         for s in rows:
-            byproj.setdefault(s["project_dir"], []).append(s)
+            byproj.setdefault(s.get("project") or "", []).append(s)
         for lst in byproj.values():
-            lst.sort(key=lambda s: -s["mtime"])
+            lst.sort(key=lambda s: -(s.get("mtime") or 0))
             for s in lst[:keepn]:
-                protected.add(s["session_id"])
+                protected.add(s["id"])
     cands = []
     for s in rows:
-        if s["session_id"] in protected:
+        if s["id"] in protected:
             continue
-        if days and now - s["mtime"] < days * 86400:
+        if days and now - (s.get("mtime") or 0) < days * 86400:
             continue
-        if bigger_mb and s["size"] < bigger_mb * 1024 * 1024:
+        if bigger_mb and (s.get("size") or 0) < bigger_mb * 1024 * 1024:
             continue
         cands.append(s)
     return cands
 
 
-def stats_json(root):
-    rows = scan_sessions(root)
-    total = sum(s["size"] for s in rows)
-    groups = {}
-    for s in rows:
-        groups.setdefault(project_label(s), []).append(s)
-    items = []
-    for p, lst in sorted(groups.items(),
-                         key=lambda kv: -sum(x["size"] for x in kv[1])):
-        latest = max(x["mtime"] for x in lst)
-        items.append({
-            "project": p,
-            "project_short": sm.short_path(p, 3),
-            "count": len(lst),
-            "size": sum(x["size"] for x in lst),
-            "size_str": sm.human_size(sum(x["size"] for x in lst)),
-            "latest": latest,
-            "latest_str": sm.fmt_mtime(latest),
-            "live": any(x["session_id"] == sm.current_sid() for x in lst),
-        })
-    trash = trash_json(root)
-    return {"total": len(rows), "total_size": total,
-            "total_size_str": sm.human_size(total),
-            "groups": items,
-            "trash_count": len(trash),
-            "trash_size_str": sm.human_size(sum(t["size"] for t in trash))}
-
-
-def show_json(root, sid):
-    rows = scan_sessions(root)
-    s = next((x for x in rows if x["session_id"] == sid), None)
-    if not s:
-        raise ValueError("未找到会话")
-    info = sm.deep_info(s)
-    d = session_json(s, compute_lines=True)
-    d.update({
-        "path": s["path"],
-        "cwd": s["cwd"],
-        "users": info["users"],
-        "asst": info["asst"],
-        "cost": info["cost"],
-        "dur": sm.fmt_dur(info["dur_ms"]) if info["dur_ms"] else "",
-        "first_text": sm.trunc(info["first_text"], 400),
-        "last_text": sm.trunc(info["last_text"], 400),
-        "start_ts": sm.short_ts(info["start_ts"]),
-        "end_ts": sm.short_ts(info["end_ts"]),
-        "last_prompt": sm.trunc(s["last_prompt"], 400),
-        "resume": "claude --resume %s" % s["session_id"],
-    })
-    return d
+def usage_json(root=None, force=False):
+    return usage_mod.collect(_installed_providers(), force=force)
 
 
 # ---------- HTTP ----------
 
+LAST_HIT = [0.0]  # 最后一次请求时间（客户端模式用来判断窗口是不是已经关了）
+CLOSE_AT = [0.0]  # 页面离开时间（客户端窗口关闭时由页面发 /api/bye）
+APP_MODE = [False]  # 是否以「客户端窗口」方式启动
+
+
 class Handler(BaseHTTPRequestHandler):
-    server_version = "SessionManager/1.0"
+    server_version = "AISessionManager/2.0"
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, fmt, *args):  # 静默，避免刷屏
-        pass
+    def log_message(self, fmt, *args):  # 静默，避免刷屏；只记活跃时间
+        if not self.path.startswith("/api/bye"):
+            LAST_HIT[0] = time.time()
 
     # -- helpers --
     def _json(self, data, code=200):
@@ -338,7 +347,6 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(raw)
 
     def _static(self, path, ctype):
-        """发送 webui/vendor 下的静态资源（只走白名单路径）。"""
         try:
             with open(path, "rb") as f:
                 raw = f.read()
@@ -388,40 +396,26 @@ class Handler(BaseHTTPRequestHandler):
                 ext = os.path.splitext(name)[1].lower()
                 if name and os.path.basename(name) == name and ext in STATIC_TYPES:
                     return self._static(os.path.join(VENDOR, name), STATIC_TYPES[ext])
+                if name and os.path.basename(name) == name and ext in (".woff2", ".woff"):
+                    return self._json({"error": "not found"}, 404)
                 return self._json({"error": "not found"}, 404)
+            if u.path == "/api/tools":
+                return self._json(tools_json(scan=qs.get("scan") == "1"))
             if u.path == "/api/sessions":
-                rows = scan_sessions(ROOT, project=qs.get("project"))
-                untitled = qs.get("untitled") == "1"
-                rows = filter_rows(rows, qs.get("q", ""), "", untitled)
-                sort = qs.get("sort", "time")
-                compute = sort == "lines"
-                if sort == "size":
-                    rows.sort(key=lambda s: (-s["size"], -s["mtime"]))
-                elif sort == "lines":
-                    for s in rows:
-                        lines_of(s, True)
-                    rows.sort(key=lambda s: (-(s["lines"] or 0), -s["mtime"]))
-                else:
-                    rows.sort(key=lambda s: (-s["mtime"], s["session_id"]))
-                total_size = sum(s["size"] for s in rows)
-                return self._json({
-                    "total": len(rows),
-                    "total_size": total_size,
-                    "total_size_str": sm.human_size(total_size),
-                    "live_id": sm.current_sid(),
-                    "root": ROOT,
-                    "sessions": [session_json(s, True) for s in rows],
-                })
+                return self._json(sessions_json(
+                    qs.get("tool") or "claude",
+                    q=qs.get("q", ""), project=qs.get("project", ""),
+                    untitled=qs.get("untitled") == "1",
+                    sort=qs.get("sort", "time")))
             if u.path == "/api/trash":
-                items = trash_json(ROOT)
-                return self._json({"items": items,
-                                   "total_size": sum(i["size"] for i in items),
-                                   "total_size_str": sm.human_size(
-                                       sum(i["size"] for i in items))})
+                return self._json(trash_json(qs.get("tool") or "claude"))
             if u.path == "/api/stats":
-                return self._json(stats_json(ROOT))
+                return self._json(stats_json(qs.get("tool") or "claude"))
             if u.path == "/api/show":
-                return self._json(show_json(ROOT, qs.get("id", "")))
+                return self._json(show_json(qs.get("tool") or "claude",
+                                            qs.get("id", "")))
+            if u.path == "/api/usage":
+                return self._json(usage_json(force=qs.get("refresh") == "1"))
             return self._json({"error": "not found"}, 404)
         except (ValueError, sm.UserError) as e:
             return self._json({"error": str(e)}, 400)
@@ -434,37 +428,55 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         try:
             body = self._body()
+            if u.path == "/api/bye":
+                # 客户端窗口关闭时页面发的信标；只认客户端窗口自己的页面
+                q = parse_qs(u.query)
+                if APP_MODE[0] and (q.get("app") or [""])[-1] == "1":
+                    CLOSE_AT[0] = time.time()
+                return self._json({"ok": True})
+            key = body.get("tool") or "claude"
+            p = provider(key)
             if u.path == "/api/delete":
                 ids = body.get("ids") or []
                 if not ids:
                     raise ValueError("没有选择会话")
-                return self._json(delete_sessions(
-                    ROOT, ids,
-                    purge=bool(body.get("purge")),
-                    force=bool(body.get("force"))))
-            if u.path == "/api/restore":
-                names = body.get("names") or []
-                if not names:
-                    raise ValueError("没有选择要恢复的文件")
-                return self._json(restore_entries(ROOT, names))
-            if u.path == "/api/empty-trash":
-                return self._json(empty_trash(ROOT))
-            if u.path == "/api/clean":
-                cands = clean_candidates(ROOT, body)
-                if body.get("dry_run"):
-                    total = sum(s["size"] for s in cands)
-                    return self._json({
-                        "dry_run": True, "count": len(cands),
-                        "total_size": total, "total_size_str": sm.human_size(total),
-                        "sessions": [session_json(s, False) for s in cands],
-                    })
-                if not cands:
-                    return self._json({"deleted": [], "freed": 0, "freed_str": "0B",
-                                       "errors": [], "skipped_live": []})
-                res = delete_sessions(ROOT, [s["session_id"] for s in cands],
-                                      purge=bool(body.get("purge")))
-                res["count"] = len(cands)
+                res = p.delete(ids, purge=bool(body.get("purge")),
+                               force=bool(body.get("force")))
+                invalidate_tools()
                 return self._json(res)
+            if u.path == "/api/restore":
+                tokens = body.get("tokens") or body.get("names") or []
+                if not tokens:
+                    raise ValueError("没有选择要恢复的条目")
+                res = p.trash_restore(tokens)
+                invalidate_tools()
+                return self._json(res)
+            if u.path == "/api/empty-trash":
+                res = p.trash_empty()
+                invalidate_tools()
+                return self._json(res)
+            if u.path == "/api/clean":
+                with _clean_lock:
+                    cands = clean_candidates(key, body)
+                    if body.get("dry_run"):
+                        total = sum(s.get("size") or 0 for s in cands)
+                        return self._json({
+                            "dry_run": True, "count": len(cands),
+                            "total_size": total,
+                            "total_size_str": human_size(total),
+                            "sessions": [session_json(s) for s in cands],
+                        })
+                    if not cands:
+                        return self._json({"deleted": [], "freed": 0,
+                                           "freed_str": "0B", "errors": [],
+                                           "skipped_live": [], "count": 0})
+                    res = p.delete([s["id"] for s in cands],
+                                   purge=bool(body.get("purge")))
+                    res["count"] = len(cands)
+                    invalidate_tools()
+                    return self._json(res)
+            if u.path == "/api/usage/refresh":
+                return self._json(usage_json(force=True))
             return self._json({"error": "not found"}, 404)
         except (ValueError, sm.UserError) as e:
             return self._json({"error": str(e)}, 400)
@@ -472,13 +484,81 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "%s: %s" % (type(e).__name__, e)}, 500)
 
 
-def serve(root=None, port=8765, open_browser=True):
+def _say(msg):
+    """窗口版 exe 没有 stdout，打印要能安静跳过。"""
+    try:
+        print(msg)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _chromium():
+    """找支持 --app 的 Chromium 内核浏览器（Edge / Chrome 都行）。"""
+    cands = []
+    if os.name == "nt":
+        for base in (os.environ.get("ProgramFiles(x86)"),
+                     os.environ.get("ProgramFiles"),
+                     os.environ.get("LOCALAPPDATA")):
+            if not base:
+                continue
+            cands.append(os.path.join(base, "Microsoft", "Edge", "Application",
+                                      "msedge.exe"))
+            cands.append(os.path.join(base, "Google", "Chrome", "Application",
+                                      "chrome.exe"))
+    elif sys.platform == "darwin":
+        cands += [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ]
+    for name in ("msedge", "chrome", "chromium", "google-chrome",
+                 "microsoft-edge", "chromium-browser"):
+        try:
+            found = shutil.which(name)
+        except Exception:  # noqa: BLE001
+            found = None
+        if found:
+            cands.append(found)
+    for p in cands:
+        if p and os.path.isfile(p):
+            return p
+    return None
+
+
+def open_app_window(url, width=1280, height=860):
+    """用浏览器的 --app 模式开一个没有地址栏/标签栏的窗口，像桌面客户端。
+    找不到 Chromium 内核浏览器时返回 None。"""
+    exe = _chromium()
+    if not exe:
+        return None
+    tag = url.rsplit(":", 1)[-1]
+    profile = os.path.join(usage_mod.cache_dir(), "app-profile-%s" % tag)
+    try:
+        os.makedirs(profile, exist_ok=True)
+    except OSError:
+        profile = tempfile.mkdtemp(prefix="aism-app-")
+    args = [
+        exe, "--app=" + url + "?app=1",
+        "--user-data-dir=" + profile,
+        "--window-size=%d,%d" % (width, height),
+        "--no-first-run", "--no-default-browser-check",
+        "--disable-background-mode",
+    ]
+    try:
+        return subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except OSError:
+        return None
+
+
+def serve(root=None, port=8765, open_browser=True, app_window=False,
+          idle_exit=1800):
     global ROOT
     if root:
         ROOT = os.path.abspath(os.path.expanduser(root))
     sm.setup_stdio()
     if not os.path.isfile(UI_FILE):
-        print("缺少界面文件: %s" % UI_FILE, file=sys.stderr)
+        _say("缺少界面文件: %s" % UI_FILE)
         return 2
     httpd = None
     last_err = None
@@ -490,22 +570,78 @@ def serve(root=None, port=8765, open_browser=True):
         except OSError as e:
             last_err = e
     if not httpd:
-        print("端口都被占用: %s" % last_err, file=sys.stderr)
+        _say("端口都被占用: %s" % last_err)
         return 1
     url = "http://127.0.0.1:%d" % port
-    print("会话管理页面: %s" % url)
-    print("数据目录:   %s" % ROOT)
-    print("按 Ctrl+C 退出（直接关闭这个窗口也可以）")
-    duration = None
+    _say("会话管理页面: %s" % url)
+    _say("Claude 数据: %s" % ROOT)
+    _say("缓存目录:   %s" % usage_mod.cache_dir())
+    _say("按 Ctrl+C 退出（直接关闭这个窗口也可以）")
+
+    proc = None
+    if app_window:
+        APP_MODE[0] = True
+        proc = open_app_window(url)
+        if proc is None:
+            # 没有 Edge / Chrome：退回默认浏览器
+            open_browser = True
+        else:
+            open_browser = False  # 已经有客户端窗口了，别再开一个浏览器
+
+        # 页面关闭时会发 /api/bye；3 秒内没有新请求才真的退出（刷新页面不算关闭）
+        def _watch_close():
+            while True:
+                time.sleep(1)
+                t = CLOSE_AT[0]
+                if t and time.time() - t > 3 and LAST_HIT[0] <= t:
+                    try:
+                        httpd.shutdown()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+        threading.Thread(target=_watch_close, daemon=True).start()
+
     if open_browser:
         try:
             webbrowser.open(url)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
+    if proc is not None:
+        # 窗口一关，浏览器进程就退出 → 服务跟着停，不留后台进程
+        def _watch_window():
+            time.sleep(2.5)
+            # Edge 已经在运行时，新窗口会交给已有进程，Popen 会立刻退出：
+            # 这种情况交给上面的 /api/bye 判断，别据此关服务
+            if proc.poll() is not None:
+                return
+            try:
+                proc.wait()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                httpd.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+        threading.Thread(target=_watch_window, daemon=True).start()
+    elif app_window and idle_exit:
+        # 退回默认浏览器时感知不到窗口关闭：长时间没人访问就自己退出
+        LAST_HIT[0] = time.time()
+
+        def _watch_idle():
+            while True:
+                time.sleep(60)
+                if time.time() - LAST_HIT[0] > idle_exit:
+                    try:
+                        httpd.shutdown()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return
+        threading.Thread(target=_watch_idle, daemon=True).start()
+
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        print("\n已退出")
+        _say("\n已退出")
     finally:
         httpd.server_close()
     return 0
@@ -513,13 +649,15 @@ def serve(root=None, port=8765, open_browser=True):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="session_web", description="session-manager 网页界面（本地）")
+        prog="session_web", description="AI 会话管理器网页界面（本地）")
     ap.add_argument("--root", default=None,
                     help="覆盖默认根目录 ~/.claude（测试用）")
     ap.add_argument("--port", type=int, default=8765, help="端口，默认 8765")
     ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
+    ap.add_argument("--app", action="store_true",
+                    help="用独立客户端窗口打开（Chromium 的 --app 模式）")
     a = ap.parse_args(argv)
-    return serve(a.root, a.port, not a.no_browser)
+    return serve(a.root, a.port, not a.no_browser, app_window=a.app)
 
 
 if __name__ == "__main__":

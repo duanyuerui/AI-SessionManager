@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'">
-<title>ClaudeSessionManager · 会话历史</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b95435'/%3E%3Cpath d='M10 11h12M10 16h12M10 21h7' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
+<title>AISessionManager · 会话与 Token</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23b95435'/%3E%3Cpath d='M9 11h14M9 16h14M9 21h9' stroke='%23fff' stroke-width='2.5' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/webui/vendor/tailwind.css">
 <script>
   /* 首屏就定好明暗，避免闪烁：localStorage 里存 auto / light / dark */
@@ -19,10 +19,11 @@
 </head>
 <body class="min-h-dvh bg-bg text-ink">
 
-<!-- ==================== 顶栏 ==================== -->
-<header class="app-head sticky top-0 z-30 border-b border-line bg-bg/85 backdrop-blur">
-  <div class="mx-auto flex h-[52px] max-w-[1600px] items-center gap-3 px-4">
-    <div class="flex min-w-0 items-center gap-2.5">
+<div class="app-shell">
+
+  <!-- ==================== 左侧菜单 ==================== -->
+  <aside class="side">
+    <div class="side-brand">
       <span class="grid h-8 w-8 shrink-0 place-items-center rounded-[10px] bg-gradient-to-br from-[#e08a67] to-[#b95435] text-white shadow-sm">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round">
@@ -30,231 +31,331 @@
         </svg>
       </span>
       <div class="min-w-0">
-        <div class="text-[13.5px] font-semibold leading-[18px] tracking-tight">ClaudeSessionManager</div>
-        <div class="truncate font-mono text-[10.5px] leading-[14px] text-faint" id="rootPath"></div>
+        <div class="text-[13.5px] font-semibold leading-[18px] tracking-tight">AISessionManager</div>
+        <div class="truncate text-[10.5px] leading-[14px] text-faint">AI 会话与 Token 工作台</div>
       </div>
     </div>
 
-    <div class="ml-auto flex items-center gap-1.5">
-      <button class="btn-ghost" id="btnTheme" type="button" title="外观"></button>
-      <button class="btn-ghost" id="btnRefresh" type="button">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
-        <span class="hidden sm:inline">刷新</span>
+    <nav class="side-nav flex flex-1 flex-col gap-0.5 overflow-y-auto px-2 pb-3" id="sideNav">
+      <button class="nav-item active" type="button" data-view="workbench">
+        <svg class="h-4 w-4 shrink-0 opacity-70" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/>
+          <rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>
+        </svg>
+        工作台
       </button>
-    </div>
-  </div>
+      <div class="side-label">会话管理</div>
+      <div id="navTools" class="flex flex-col gap-0.5"></div>
+    </nav>
 
-  <nav class="mx-auto flex max-w-[1600px] items-center gap-1 overflow-x-auto px-3 pb-2" id="tabs">
-    <button class="tab active" data-tab="sessions" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
-      会话 <span class="tab-count" id="cntSessions">0</span>
-    </button>
-    <button class="tab" data-tab="trash" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg>
-      回收站 <span class="tab-count" id="cntTrash">0</span>
-    </button>
-    <button class="tab" data-tab="clean" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16"/><path d="m6 16 8.5-8.5a2.1 2.1 0 0 1 3 3L9 19"/><path d="M14 6l4 4"/></svg>
-      批量清理
-    </button>
-    <button class="tab" data-tab="stats" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>
-      统计
-    </button>
-  </nav>
-</header>
-
-<main class="mx-auto max-w-[1600px] px-4 py-4">
-
-  <!-- ==================== 会话 ==================== -->
-  <section id="tab-sessions" class="flex min-h-0 flex-col">
-    <div class="mb-3 flex flex-wrap items-center gap-2">
-      <div class="relative min-w-[200px] max-w-[360px] flex-1 basis-[240px]">
-        <svg class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint"
-             viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
-          <circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5 14 14"/></svg>
-        <input class="field pl-8" id="q" placeholder="搜索标题 / 项目 / 会话 ID…" autocomplete="off">
-      </div>
-
-      <div class="w-[286px] shrink-0">
-        <select id="proj" placeholder="全部项目">
-          <option value="">全部项目</option>
+    <div class="border-t border-line p-2">
+      <div class="mb-1.5 flex items-center justify-between gap-2 px-1">
+        <span class="text-[11px] text-faint">自动扫描</span>
+        <select class="auto-scan" id="autoScan" title="自动重新扫描本机 AI 客户端">
+          <option value="0">关闭</option>
+          <option value="10">10秒</option>
+          <option value="15">15秒</option>
+          <option value="30" selected>30秒</option>
+          <option value="60">1分钟</option>
         </select>
       </div>
-
-      <select class="field w-auto" id="sort">
-        <option value="time">按最后活动</option>
-        <option value="size">按大小</option>
-        <option value="lines">按行数</option>
-        <option value="project">按项目</option>
-        <option value="title">按标题</option>
-      </select>
-
-      <label class="ml-0.5 inline-flex cursor-pointer select-none items-center gap-2 text-[12.5px] text-muted">
-        <input type="checkbox" id="untitledOnly" class="peer sr-only">
-        <span class="relative h-[18px] w-8 shrink-0 rounded-full bg-line-strong transition
-                     after:absolute after:left-[2px] after:top-[2px] after:h-3.5 after:w-3.5 after:rounded-full
-                     after:bg-white after:shadow after:transition peer-checked:bg-accent peer-checked:after:translate-x-[14px]
-                     peer-focus-visible:ring-2 peer-focus-visible:ring-accent/30"></span>
-        只看无标题
-      </label>
-
-      <span class="ml-auto whitespace-nowrap text-[11.5px] tabular-nums text-muted" id="summary">加载中…</span>
-      <button class="btn-danger-ghost" id="btnBatchDel" type="button" disabled
-              title="勾选下表任意行（点行也可以勾选，Shift+点击选连续一段），再点这里批量移入回收站">批量删除</button>
+      <div class="flex items-center gap-1">
+        <button class="btn-ghost flex-1" id="btnTheme" type="button" title="外观"></button>
+        <button class="btn-ghost shrink-0" id="btnScan" type="button" title="立即扫描本机 AI 客户端">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/><path d="M12 7a5 5 0 1 0 5 5"/><circle cx="12" cy="12" r="1"/><path d="M21 3v6h-6"/></svg>
+        </button>
+        <button class="btn-ghost shrink-0" id="btnRefresh" type="button" title="刷新">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+        </button>
+      </div>
+      <div class="mt-2 truncate px-1 font-mono text-[9.5px] text-faint" id="rootPath"></div>
     </div>
+  </aside>
 
-    <div class="card flex min-h-0 flex-1 flex-col overflow-hidden">
-      <div class="table-scroll min-h-0 flex-1 overflow-auto">
-        <table class="data-table">
-          <thead class="table-head">
-            <tr>
-              <th class="c-check"><input type="checkbox" id="selAll" title="全选"></th>
-              <th class="c-time sortable" data-sort="time" aria-sort="descending" title="点击排序，再点反向">最后活动<span class="sort-ind">↑</span></th>
-              <th class="c-size sortable" data-sort="size" aria-sort="none" title="点击排序，再点反向">大小<span class="sort-ind">↑</span></th>
-              <th class="c-lines sortable" data-sort="lines" aria-sort="none" title="点击排序，再点反向">行数<span class="sort-ind">↑</span></th>
-              <th class="c-proj sortable" data-sort="project" aria-sort="none" title="点击排序，再点反向">项目<span class="sort-ind">↑</span></th>
-              <th class="sortable" data-sort="title" aria-sort="none" title="点击排序，再点反向">标题<span class="sort-ind">↑</span></th>
-              <th class="c-act"></th>
-            </tr>
-          </thead>
-          <tbody id="rows"></tbody>
-        </table>
+  <!-- ==================== 主区域 ==================== -->
+  <main class="app-main">
+    <div class="app-main-inner">
 
-        <div class="d-none px-6 py-16 text-center" id="emptySessions">
-          <div class="mx-auto grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-faint ring-1 ring-line">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-                 stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <!-- ========== 工作台 ========== -->
+      <section id="view-workbench">
+        <div class="view-head">
+          <div class="view-main">
+            <h1 class="view-title">工作台</h1>
+            <p class="view-desc" id="wbSub">跨工具的 Token 用量与磁盘占用</p>
           </div>
-          <div class="mt-3 text-[13px] font-medium text-ink-2">没有匹配的会话</div>
-          <div class="mt-1 text-[12px] text-faint">换个筛选条件，或清空搜索词。</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ==================== 回收站 ==================== -->
-  <section id="tab-trash" class="d-none">
-    <div class="mb-3 flex flex-wrap items-center gap-2">
-      <h2 class="text-[14px] font-semibold">回收站</h2>
-      <span class="badge" id="trashCount"></span>
-      <span class="text-[12px] tabular-nums text-muted" id="trashSize"></span>
-      <button class="btn-danger-ghost ml-auto" id="btnEmptyTrash" type="button">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-             stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
-        清空回收站
-      </button>
-    </div>
-
-    <div class="card overflow-hidden">
-      <div class="overflow-x-auto">
-        <table class="data-table">
-          <thead class="table-head">
-            <tr>
-              <th class="c-time">删除时间</th>
-              <th class="c-size">大小</th>
-              <th class="c-proj">原项目</th>
-              <th>标题</th>
-              <th class="c-act"></th>
-            </tr>
-          </thead>
-          <tbody id="trashRows"></tbody>
-        </table>
-        <div class="d-none px-6 py-16 text-center" id="emptyTrash">
-          <div class="mx-auto grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-faint ring-1 ring-line">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-                 stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
+          <div class="seg-ctl" id="wbPeriod">
+            <button class="seg-btn active" type="button" data-period="day">日</button>
+            <button class="seg-btn" type="button" data-period="week">周</button>
+            <button class="seg-btn" type="button" data-period="month">月</button>
+            <button class="seg-btn" type="button" data-period="year">年</button>
           </div>
-          <div class="mt-3 text-[13px] font-medium text-ink-2">回收站是空的</div>
-          <div class="mt-1 text-[12px] text-faint">删除的会话会先放到这里，可随时恢复。</div>
+          <div class="seg-ctl" id="wbRange"></div>
+          <button class="btn-ghost" id="btnRescan" type="button" title="忽略缓存，重新解析所有会话文件">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                 stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+            重新扫描
+          </button>
         </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- ==================== 批量清理 ==================== -->
-  <section id="tab-clean" class="d-none">
-    <div class="mb-3 flex flex-wrap items-baseline gap-2">
-      <h2 class="text-[14px] font-semibold">批量清理</h2>
-      <span class="text-[12px] text-faint">先预览，确认后再删除；默认进回收站。</span>
-    </div>
-
-    <div class="card overflow-hidden">
-      <div class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div>
-          <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cDays">超过多少天未活动</label>
-          <input class="field" id="cDays" type="number" min="0" step="1" placeholder="如 30">
-          <div class="mt-1 text-[11px] text-faint">留空则不限</div>
+        <div class="grid grid-cols-2 gap-3 lg:grid-cols-4" id="wbTiles">
+          <div class="tile"><div class="tile-label">总 Token</div><div class="tile-value" id="t1">—</div><div class="tile-sub">加载中…</div></div>
+          <div class="tile"><div class="tile-label">输入</div><div class="tile-value" id="t2">—</div><div class="tile-sub">&nbsp;</div></div>
+          <div class="tile"><div class="tile-label">输出</div><div class="tile-value" id="t3">—</div><div class="tile-sub">&nbsp;</div></div>
+          <div class="tile"><div class="tile-label">缓存读取</div><div class="tile-value" id="t4">—</div><div class="tile-sub">命中率 —</div></div>
         </div>
-        <div>
-          <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cMb">只清理大于 (MB)</label>
-          <input class="field" id="cMb" type="number" min="0" step="1" placeholder="如 5">
-          <div class="mt-1 text-[11px] text-faint">留空则不限</div>
-        </div>
-        <div>
-          <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cKeep">每个项目保留最近</label>
-          <input class="field" id="cKeep" type="number" min="0" step="1" placeholder="如 3">
-          <div class="mt-1 text-[11px] text-faint">留空则不限</div>
-        </div>
-        <div>
-          <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cProj">限定项目</label>
-          <select id="cProj" placeholder="全部项目">
-            <option value="">全部项目</option>
-          </select>
-          <div class="mt-1 text-[11px] text-faint">条件可组合，至少要填一个</div>
-        </div>
-      </div>
 
-      <div class="flex flex-wrap items-center gap-3 border-t border-line bg-surface-2 px-4 py-3">
-        <button class="btn-primary" id="btnPreview" type="button">预览匹配结果</button>
-        <label class="inline-flex cursor-pointer select-none items-center gap-2 text-[12.5px] text-danger">
-          <input type="checkbox" id="cPurge" class="peer sr-only">
-          <span class="relative h-[18px] w-8 shrink-0 rounded-full bg-line-strong transition
-                       after:absolute after:left-[2px] after:top-[2px] after:h-3.5 after:w-3.5 after:rounded-full
-                       after:bg-white after:shadow after:transition peer-checked:bg-danger peer-checked:after:translate-x-[14px]
-                       peer-focus-visible:ring-2 peer-focus-visible:ring-danger/30"></span>
-          永久删除（不进回收站）
-        </label>
-        <span class="ml-auto text-[12px] text-muted" id="previewHint"></span>
-      </div>
-    </div>
+        <div class="card mt-3 p-4" id="wbChartCard">
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <h2 class="text-[13.5px] font-semibold">用量趋势</h2>
+            <span class="text-[11.5px] text-faint" id="wbChartDesc"></span>
+            <div class="seg-ctl ml-auto" id="wbMode">
+              <button class="seg-btn active" type="button" data-mode="chart">图表</button>
+              <button class="seg-btn" type="button" data-mode="table">表格</button>
+            </div>
+          </div>
+          <div class="mb-3 flex flex-wrap items-center gap-1.5" id="wbTools"></div>
 
-    <div class="card d-none mt-3 overflow-hidden" id="previewBox">
-      <div class="flex flex-wrap items-center gap-2 border-b border-line bg-surface-2 px-4 py-2.5">
-        <span class="text-[13px] font-semibold">匹配到的会话</span>
-        <span class="badge" id="previewCount"></span>
-        <span class="text-[12px] tabular-nums text-muted" id="previewSize"></span>
-        <button class="btn-danger ml-auto" id="btnCleanExec" type="button">执行清理</button>
-      </div>
-      <div class="max-h-[52vh] overflow-auto">
-        <table class="data-table">
-          <thead class="table-head">
-            <tr>
-              <th class="c-time">最后活动</th>
-              <th class="c-size">大小</th>
-              <th class="c-proj">项目</th>
-              <th>标题</th>
-            </tr>
-          </thead>
-          <tbody id="previewRows"></tbody>
-        </table>
-      </div>
-    </div>
-  </section>
+          <div id="wbChartWrap">
+            <div class="chart">
+              <div class="chart-y" id="wbY"></div>
+              <div class="chart-plot">
+                <div class="chart-grid" id="wbGrid"></div>
+                <div class="bars" id="wbBars"></div>
+                <div class="bar-x" id="wbX"></div>
+              </div>
+            </div>
+            <div class="mt-3 border-t border-line pt-3 legend" id="wbLegend"></div>
+          </div>
+          <div id="wbTableWrap" class="d-none overflow-x-auto"></div>
+        </div>
 
-  <!-- ==================== 统计 ==================== -->
-  <section id="tab-stats" class="d-none">
-    <div class="mb-3 flex flex-wrap items-baseline gap-2">
-      <h2 class="text-[14px] font-semibold">存储占用</h2>
-      <span class="text-[12px] text-faint">按项目汇总，找“谁最占地方”。</span>
+        <div class="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div class="card overflow-hidden">
+            <div class="flex items-center gap-2 border-b border-line px-4 py-2.5">
+              <h2 class="text-[13.5px] font-semibold">按工具</h2>
+              <span class="text-[11.5px] text-faint">当前区间 · 全部工具</span>
+            </div>
+            <div id="wbToolRows"></div>
+          </div>
+          <div class="card overflow-hidden">
+            <div class="flex items-center gap-2 border-b border-line px-4 py-2.5">
+              <h2 class="text-[13.5px] font-semibold">按模型</h2>
+              <span class="text-[11.5px] text-faint">全部时间 · 前 8</span>
+            </div>
+            <div id="wbModels"></div>
+          </div>
+        </div>
+
+        <p class="mt-3 text-[11px] leading-relaxed text-faint" id="wbNote"></p>
+      </section>
+
+      <!-- ========== 单个工具 ========== -->
+      <section id="view-tool" class="d-none">
+        <div class="view-head">
+          <span class="tool-dot mt-2 h-2.5 w-2.5" id="toolDot"></span>
+          <div class="view-main">
+            <div class="flex min-w-0 flex-wrap items-center gap-2">
+              <h1 class="view-title" id="toolName">—</h1>
+              <span class="badge d-none" id="toolBadge"></span>
+            </div>
+            <p class="view-desc font-mono" id="toolRoot"></p>
+          </div>
+          <div class="flex flex-wrap items-center gap-1" id="toolTabs">
+            <button class="tab active" type="button" data-tab="sessions">会话 <span class="tab-count" id="cntSessions">0</span></button>
+            <button class="tab" type="button" data-tab="trash">回收站 <span class="tab-count" id="cntTrash">0</span></button>
+            <button class="tab" type="button" data-tab="clean">批量清理</button>
+            <button class="tab" type="button" data-tab="stats">占用</button>
+          </div>
+        </div>
+
+        <!-- 会话 -->
+        <div id="tab-sessions" class="flex min-h-0 flex-col">
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <div class="relative min-w-[190px] max-w-[340px] flex-1 basis-[220px]">
+              <svg class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint"
+                   viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7">
+                <circle cx="7" cy="7" r="4.6"/><path d="M10.5 10.5 14 14"/></svg>
+              <input class="field pl-8" id="q" placeholder="搜索标题 / 项目 / 会话 ID…" autocomplete="off">
+            </div>
+            <div class="w-[272px] shrink-0">
+              <select id="proj" placeholder="全部项目"><option value="">全部项目</option></select>
+            </div>
+            <select class="field w-auto" id="sort">
+              <option value="time">按最后活动</option>
+              <option value="size">按大小</option>
+              <option value="tokens">按 Token</option>
+              <option value="project">按项目</option>
+              <option value="title">按标题</option>
+            </select>
+            <label class="ml-0.5 inline-flex cursor-pointer select-none items-center gap-2 text-[12.5px] text-muted">
+              <input type="checkbox" id="untitledOnly" class="peer sr-only">
+              <span class="relative h-[18px] w-8 shrink-0 rounded-full bg-line-strong transition
+                           after:absolute after:left-[2px] after:top-[2px] after:h-3.5 after:w-3.5 after:rounded-full
+                           after:bg-white after:shadow after:transition peer-checked:bg-accent peer-checked:after:translate-x-[14px]
+                           peer-focus-visible:ring-2 peer-focus-visible:ring-accent/30"></span>
+              只看无标题
+            </label>
+            <span class="ml-auto whitespace-nowrap text-[11.5px] tabular-nums text-muted" id="summary">—</span>
+            <button class="btn-danger-ghost" id="btnBatchDel" type="button" disabled>批量删除</button>
+          </div>
+
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="data-table">
+                <thead class="table-head">
+                  <tr>
+                    <th class="c-check"><input type="checkbox" id="selAll" title="全选"></th>
+                    <th class="c-time">最后活动</th>
+                    <th class="c-tokens">Token</th>
+                    <th class="c-size">大小</th>
+                    <th class="c-proj">项目</th>
+                    <th>标题</th>
+                    <th class="c-act"></th>
+                  </tr>
+                </thead>
+                <tbody id="rows"></tbody>
+              </table>
+              <div class="d-none px-6 py-16 text-center" id="emptySessions">
+                <div class="mx-auto grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-faint ring-1 ring-line">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                       stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                </div>
+                <div class="mt-3 text-[13px] font-medium text-ink-2">没有匹配的会话</div>
+                <div class="mt-1 text-[12px] text-faint">换个筛选条件，或清空搜索词。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 回收站 -->
+        <div id="tab-trash" class="d-none">
+          <div class="mb-3 flex flex-wrap items-center gap-2">
+            <span class="text-[12px] text-faint" id="trashHint">删除的会话先放到这里，可随时恢复。</span>
+            <span class="badge" id="trashCount"></span>
+            <span class="text-[12px] tabular-nums text-muted" id="trashSize"></span>
+            <button class="btn-danger-ghost ml-auto" id="btnEmptyTrash" type="button">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                   stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
+              清空回收站
+            </button>
+          </div>
+          <div class="card overflow-hidden">
+            <div class="overflow-x-auto">
+              <table class="data-table">
+                <thead class="table-head">
+                  <tr>
+                    <th class="c-time">删除时间</th>
+                    <th class="c-size">大小</th>
+                    <th class="c-proj">原项目</th>
+                    <th>标题</th>
+                    <th class="c-act"></th>
+                  </tr>
+                </thead>
+                <tbody id="trashRows"></tbody>
+              </table>
+              <div class="d-none px-6 py-16 text-center" id="emptyTrash">
+                <div class="mx-auto grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-faint ring-1 ring-line">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                       stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/></svg>
+                </div>
+                <div class="mt-3 text-[13px] font-medium text-ink-2">回收站是空的</div>
+                <div class="mt-1 text-[12px] text-faint">删除的会话会先放到这里。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 批量清理 -->
+        <div id="tab-clean" class="d-none">
+          <div class="mb-3 flex flex-wrap items-baseline gap-2">
+            <span class="text-[12px] text-faint">先预览，确认后再删除；默认进回收站。</span>
+          </div>
+          <div class="card overflow-hidden">
+            <div class="grid grid-cols-1 gap-4 p-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div>
+                <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cDays">超过多少天未活动</label>
+                <input class="field" id="cDays" type="number" min="0" step="1" placeholder="如 30">
+                <div class="mt-1 text-[11px] text-faint">留空则不限</div>
+              </div>
+              <div>
+                <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cMb">只清理大于 (MB)</label>
+                <input class="field" id="cMb" type="number" min="0" step="1" placeholder="如 5">
+                <div class="mt-1 text-[11px] text-faint">留空则不限</div>
+              </div>
+              <div>
+                <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cKeep">每个项目保留最近</label>
+                <input class="field" id="cKeep" type="number" min="0" step="1" placeholder="如 3">
+                <div class="mt-1 text-[11px] text-faint">留空则不限</div>
+              </div>
+              <div>
+                <label class="mb-1 block text-[12px] font-medium text-ink-2" for="cProj">限定项目</label>
+                <select id="cProj" placeholder="全部项目"><option value="">全部项目</option></select>
+                <div class="mt-1 text-[11px] text-faint">条件可组合，至少要填一个</div>
+              </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-3 border-t border-line bg-surface-2 px-4 py-3">
+              <button class="btn-primary" id="btnPreview" type="button">预览匹配结果</button>
+              <label class="inline-flex cursor-pointer select-none items-center gap-2 text-[12.5px] text-danger">
+                <input type="checkbox" id="cPurge" class="peer sr-only">
+                <span class="relative h-[18px] w-8 shrink-0 rounded-full bg-line-strong transition
+                             after:absolute after:left-[2px] after:top-[2px] after:h-3.5 after:w-3.5 after:rounded-full
+                             after:bg-white after:shadow after:transition peer-checked:bg-danger peer-checked:after:translate-x-[14px]
+                             peer-focus-visible:ring-2 peer-focus-visible:ring-danger/30"></span>
+                永久删除（不进回收站）
+              </label>
+              <span class="ml-auto text-[12px] text-muted" id="previewHint"></span>
+            </div>
+          </div>
+          <div class="card d-none mt-3 overflow-hidden" id="previewBox">
+            <div class="flex flex-wrap items-center gap-2 border-b border-line bg-surface-2 px-4 py-2.5">
+              <span class="text-[13px] font-semibold">匹配到的会话</span>
+              <span class="badge" id="previewCount"></span>
+              <span class="text-[12px] tabular-nums text-muted" id="previewSize"></span>
+              <button class="btn-danger ml-auto" id="btnCleanExec" type="button">执行清理</button>
+            </div>
+            <div class="max-h-[52vh] overflow-auto">
+              <table class="data-table">
+                <thead class="table-head">
+                  <tr><th class="c-time">最后活动</th><th class="c-size">大小</th><th class="c-proj">项目</th><th>标题</th></tr>
+                </thead>
+                <tbody id="previewRows"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 占用 -->
+        <div id="tab-stats" class="d-none">
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3" id="statTotal"></div>
+          <div class="card mt-3 overflow-hidden" id="statsCard">
+            <div id="statRows"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== 未安装 ========== -->
+      <section id="view-missing" class="d-none">
+        <div class="card mx-auto mt-10 max-w-[520px] px-6 py-10 text-center">
+          <div class="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-surface-2 text-faint ring-1 ring-line">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+                 stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4"/><path d="M12 17h.01"/>
+              <circle cx="12" cy="12" r="9"/></svg>
+          </div>
+          <h2 class="mt-3 text-[15px] font-semibold" id="missName">未安装</h2>
+          <p class="mt-1 text-[12.5px] text-muted" id="missText"></p>
+          <p class="mt-3 break-all rounded-lg bg-surface-2 px-3 py-2 font-mono text-[11px] text-faint" id="missPath"></p>
+          <p class="mt-3 text-[11.5px] leading-relaxed text-faint">
+            安装并使用这个工具后，它的会话目录会自动出现，无需改配置。
+          </p>
+        </div>
+      </section>
+
     </div>
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-3" id="statTotal"></div>
-    <div class="card mt-3 overflow-hidden" id="statsCard">
-      <div id="statRows"></div>
-    </div>
-  </section>
-</main>
+  </main>
+</div>
 
 <!-- 批量选择浮动条 -->
 <div class="pointer-events-none fixed inset-x-0 bottom-5 z-40 flex justify-center px-3">
@@ -262,7 +363,7 @@
     <span class="text-[12px] text-muted">已选 <b class="text-[13px] tabular-nums text-ink" id="selCount">0</b> 个 ·
       <b class="text-[13px] tabular-nums text-ink" id="selSize">0B</b></span>
     <button class="btn-ghost" id="btnClearSel" type="button">取消选择</button>
-    <button class="btn-primary" id="btnDeleteSel" type="button">批量移入回收站</button>
+    <button class="btn-primary" id="btnDeleteSel" type="button">移入回收站</button>
     <button class="btn-danger-ghost" id="btnPurgeSel" type="button">永久删除</button>
   </div>
 </div>
@@ -292,7 +393,7 @@
 <!-- 详情抽屉 -->
 <div class="fixed inset-0 z-50 hidden" id="detailWrap">
   <div class="absolute inset-0 bg-black/45 opacity-0 transition-opacity duration-200" id="detailBackdrop"></div>
-  <aside class="absolute right-0 top-0 flex h-full w-[min(480px,94vw)] translate-x-full flex-col border-l border-line bg-surface shadow-float transition-transform duration-200"
+  <aside class="absolute right-0 top-0 flex h-full w-[min(500px,94vw)] translate-x-full flex-col border-l border-line bg-surface shadow-float transition-transform duration-200"
          id="detailCanvas">
     <header class="flex items-center gap-3 border-b border-line px-4 py-3">
       <h2 class="min-w-0 flex-1 truncate text-[13.5px] font-semibold" id="detailTitle"></h2>
@@ -306,6 +407,7 @@
 </div>
 
 <div class="pointer-events-none fixed bottom-4 right-4 z-[60] flex flex-col items-end gap-2" id="toasts"></div>
+<div class="chart-tip d-none" id="chartTip" role="tooltip"></div>
 
 <script src="/webui/vendor/tom-select.complete.min.js"></script>
 <script>
@@ -313,25 +415,46 @@
   "use strict";
 
   const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+
+  const TOOLS = {
+    claude: { name: "Claude Code", hint: "~/.claude/projects" },
+    codex: { name: "Codex", hint: "~/.codex/sessions" },
+    dsh: { name: "DSH", hint: "~/.dsh/sessions" },
+    workbuddy: { name: "WorkBuddy", hint: "~/.workbuddy" },
+    zcode: { name: "ZCode", hint: "~/.zcode/cli/db/db.sqlite" },
+  };
+  const TOOL_ORDER = ["claude", "codex", "dsh", "workbuddy", "zcode"];
+  const PERIOD_LABEL = { day: "日", week: "周", month: "月", year: "年" };
+  const RANGES = { day: [7, 30, 90], week: [8, 16, 52], month: [6, 12, 24], year: [3, 5, 10] };
+
   const state = {
+    tools: [],
+    toolMap: {},
+    view: "workbench",
+    tab: "sessions",
+    tool: null,
     sessions: [],
     selected: new Set(),
     lastIdx: null,
     trash: [],
     preview: [],
-    tab: "sessions",
-    stats: null,
-    sortKey: "time",
-    sortDir: -1,           // -1 降序 / 1 升序
+    usage: null,
+    enabled: new Set(),
+    chartMode: "chart",
+    readonly: false,
+    other: true,
+    knownPrimary: new Set(),
+    period: "day",
+    range: 30,
+    sort: "time",
+    busy: false,
+    autoSec: 30,
   };
-  // 文本列点开时默认升序，数值/时间列默认降序
-  const TEXT_SORTS = new Set(["project", "title"]);
 
   // ---------- 工具 ----------
-  const esc = (s) => String(s == null ? "" : s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-
   function toast(title, detail, kind) {
     const dot = kind === "err" ? "bg-danger" : kind === "ok" ? "bg-success" : "bg-faint";
     const el = document.createElement("div");
@@ -360,12 +483,35 @@
     if (!res.ok || data.error) throw new Error(data.error || ("HTTP " + res.status));
     return data;
   }
-
   const post = (path, body) => api(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body || {}),
   });
+
+  function human(n) {
+    n = Number(n) || 0;
+    const u = ["B", "K", "M", "G", "T"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? Math.round(n) : n.toFixed(1)) + u[i];
+  }
+  function tok(n) {
+    n = Number(n) || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + "M";
+    if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + "K";
+    return String(Math.round(n));
+  }
+  function num(n) { return (Number(n) || 0).toLocaleString("zh-CN"); }
+  function totalOf(b) {
+    if (!b) return 0;
+    return (b.input || 0) + (b.cache_read || 0) + (b.cache_write || 0) + (b.output || 0);
+  }
+  function toolName(k) {
+    if (k === "other") return "其他 AI";
+    const t = state.toolMap[k];
+    return (t && t.name) || (TOOLS[k] || {}).name || k;
+  }
 
   // ---------- 主题 ----------
   const ICONS = {
@@ -382,9 +528,9 @@
   function applyTheme(t) {
     const mode = t === "auto" ? systemTheme() : t;
     document.documentElement.classList.toggle("dark", mode === "dark");
-    $("btnTheme").innerHTML = ICONS[t] + `<span class="hidden sm:inline">${THEME_NAME[t]}</span>`;
+    $("btnTheme").innerHTML = ICONS[t] + `<span>${THEME_NAME[t]}</span>`;
     $("btnTheme").title = "外观：" + THEME_NAME[t] + "（点击切换）";
-    syncHeadHeight();
+    if (state.usage) renderChart();
   }
   $("btnTheme").onclick = () => {
     const order = ["auto", "light", "dark"];
@@ -395,17 +541,9 @@
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change",
     () => { if (savedTheme() === "auto") applyTheme("auto"); });
 
-  // 主区域高度跟着顶栏实际高度走
-  function syncHeadHeight() {
-    const h = document.querySelector(".app-head").offsetHeight;
-    document.documentElement.style.setProperty("--head-h", h + "px");
-  }
-  window.addEventListener("resize", syncHeadHeight);
-
   // ---------- 确认弹窗 ----------
   const cmEl = $("confirmModal");
   let cmResolve = null;
-
   function settleConfirm(value) {
     const r = cmResolve;
     cmResolve = null;
@@ -425,14 +563,12 @@
       const list = o.items && o.items.length
         ? `<div class="mt-3 max-h-[180px] overflow-auto rounded-lg border border-line bg-surface-2">
              ${o.items.map((t) => `<div class="truncate border-t border-line px-2.5 py-1 first:border-t-0" title="${esc(t)}">${esc(t)}</div>`).join("")}
-           </div>`
-        : "";
+           </div>` : "";
       const ack = o.requireAck
         ? `<label class="mt-3 flex cursor-pointer items-start gap-2 rounded-lg bg-danger-soft px-3 py-2 text-[12.5px] text-danger">
              <input type="checkbox" id="cmAck" class="mt-0.5">
              <span>${esc(o.ackText || "我确认此操作不可恢复")}</span>
-           </label>`
-        : "";
+           </label>` : "";
       $("cmBody").innerHTML = (o.message || "") + list + ack;
       const yes = $("cmYes");
       yes.className = o.danger ? "btn-danger" : "btn-primary";
@@ -450,11 +586,10 @@
   const detailCanvas = $("detailCanvas");
   const detailBackdrop = $("detailBackdrop");
   let detailTimer = null;
-
   function openDetailPanel() {
     clearTimeout(detailTimer);
     detailWrap.classList.remove("hidden");
-    void detailCanvas.offsetWidth; // 强制回流，让过渡生效
+    void detailCanvas.offsetWidth;
     detailBackdrop.classList.replace("opacity-0", "opacity-100");
     detailCanvas.classList.replace("translate-x-full", "translate-x-0");
   }
@@ -470,12 +605,655 @@
     if (e.key === "Escape" && !detailWrap.classList.contains("hidden") && !cmEl.open) closeDetailPanel();
   });
 
-  // ---------- 会话列表 ----------
+  // ---------- 侧边栏 ----------
+  async function loadTools(scan) {
+    const data = await api("/api/tools" + (scan ? "?scan=1" : ""));
+    state.tools = data.tools;
+    state.toolMap = {};
+    data.tools.forEach((t) => { state.toolMap[t.key] = t; });
+    $("rootPath").textContent = "缓存 " + (data.cache_file || "");
+    renderNav();
+    updateWorkbenchTools();
+    if ((state.view === "tool" || state.view === "missing") && state.tool
+        && !state.toolMap[state.tool]) {
+      showView("workbench");
+    }
+    return data;
+  }
+
+  function dotKeyOf(t) { return t.primary ? t.key : "other"; }
+
+  function navItem(t) {
+    if (!t.installed) {
+      return `<button class="nav-item opacity-60" type="button" data-tool="${esc(t.key)}"
+                title="${esc(t.root)} 未安装">
+        <span class="tool-dot" data-tool="${esc(t.key)}"></span>
+        ${esc(t.name)}<span class="nav-badge">未安装</span>
+      </button>`;
+    }
+    const badge = t.empty ? '<span class="nav-badge">暂无</span>'
+      : ((t.readonly ? '<span class="nav-badge">只读</span>' : "")
+         + `<span class="nav-count">${t.sessions}</span>`);
+    const tip = [t.root, t.via].filter(Boolean).join(" · ");
+    return `<button class="nav-item ${state.view === t.key ? "active" : ""}" type="button"
+              data-tool="${esc(t.key)}" title="${esc(tip)}">
+      <span class="tool-dot" data-tool="${dotKeyOf(t)}"></span>
+      <span class="min-w-0 truncate">${esc(t.name)}</span>${badge}
+    </button>`;
+  }
+
+  function renderNav() {
+    const primary = state.tools.filter((t) => t.primary);
+    const found = state.tools.filter((t) => !t.primary && t.installed && !t.empty);
+    const empty = state.tools.filter((t) => !t.primary && t.installed && t.empty);
+    const emptyOpen = !!document.querySelector(".side-empty[open]");
+    let html = primary.map(navItem).join("");
+    if (found.length) {
+      html += `<div class="side-label">已发现 ${found.length}</div>`;
+      html += found.map(navItem).join("");
+    }
+    if (empty.length) {
+      html += `<details class="side-empty"${emptyOpen ? " open" : ""}><summary class="side-label">已检测到 · 暂无会话（${empty.length}）</summary>`;
+      html += `<div class="flex flex-col gap-0.5">${empty.map(navItem).join("")}</div></details>`;
+    }
+    $("navTools").innerHTML = html;
+    document.querySelectorAll("#sideNav [data-view]").forEach((b) =>
+      b.classList.toggle("active", state.view === "workbench"));
+  }
+
+  function showView(view) {
+    state.view = view;
+    ["view-workbench", "view-tool", "view-missing"].forEach((id) =>
+      $(id).classList.toggle("d-none", id !== "view-" + view));
+    document.querySelectorAll("#sideNav [data-view]").forEach((b) =>
+      b.classList.toggle("active", view === "workbench"));
+    document.querySelectorAll("#navTools button[data-tool]").forEach((b) =>
+      b.classList.toggle("active", b.getAttribute("data-tool") === view));
+  }
+
+  async function openTool(key) {
+    const t = state.toolMap[key];
+    if (!t) return;
+    state.tool = key;
+    if (!t.installed || t.empty) {
+      $("missName").textContent = (t.empty ? "已检测到 " : "未安装 ") + t.name;
+      $("missText").textContent = t.empty
+        ? "数据目录存在，但还没有可读取的会话记录。"
+        : "没有检测到这个工具的数据目录。";
+      $("missPath").textContent = t.root;
+      showView("missing");
+      return;
+    }
+    state.readonly = !!t.readonly;
+    $("toolName").textContent = t.name;
+    $("toolRoot").textContent = [t.root, t.via].filter(Boolean).join(" · ");
+    $("toolDot").setAttribute("data-tool", dotKeyOf(t));
+    const badge = $("toolBadge");
+    badge.textContent = t.readonly ? "只读发现" : "已发现";
+    badge.classList.toggle("d-none", !!t.primary);
+    document.querySelectorAll('#toolTabs [data-tab="trash"], #toolTabs [data-tab="clean"]')
+      .forEach((b) => b.classList.toggle("d-none", state.readonly));
+    setTab("sessions", false);
+    showView("tool");
+    state.sort = "time";
+    $("sort").value = "time";
+    $("q").value = "";
+    $("untitledOnly").checked = false;
+    tsProj.setValue("", true);
+    state.selected.clear();
+    state.lastIdx = null;
+    await Promise.all([loadSessions(), loadTrash(), loadStats()]);
+    fillProjects();
+  }
+
+  function setTab(tab, load) {
+    if (state.readonly && (tab === "trash" || tab === "clean")) tab = "sessions";
+    state.tab = tab;
+    document.querySelectorAll("#toolTabs .tab").forEach((b) =>
+      b.classList.toggle("active", b.getAttribute("data-tab") === tab));
+    ["sessions", "trash", "clean", "stats"].forEach((t) =>
+      $("tab-" + t).classList.toggle("d-none", t !== tab));
+    if (load !== false) {
+      if (tab === "trash") loadTrash();
+      if (tab === "stats") loadStats();
+    }
+  }
+
+  // ============================================================
+  //  工作台
+  // ============================================================
+  function pad2(n) { return String(n).padStart(2, "0"); }
+  function dayKeyOf(d) {
+    return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate());
+  }
+  function parseDay(s) {
+    const p = s.split("-").map(Number);
+    return new Date(p[0], p[1] - 1, p[2], 12);
+  }
+  function periodKeyOf(day, period) {
+    if (period === "day") return day;
+    if (period === "month") return day.slice(0, 7);
+    if (period === "year") return day.slice(0, 4);
+    const d = parseDay(day);
+    const monday = new Date(d);
+    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+    return dayKeyOf(monday);
+  }
+
+  function periodList(period, n) {
+    const now = new Date();
+    now.setHours(12, 0, 0, 0);
+    const out = [];
+    if (period === "day") {
+      for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(now); d.setDate(d.getDate() - i);
+        out.push({ key: dayKeyOf(d), label: pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) });
+      }
+    } else if (period === "week") {
+      const start = new Date(now);
+      start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(start); d.setDate(d.getDate() - i * 7);
+        out.push({ key: dayKeyOf(d), label: pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()) });
+      }
+    } else if (period === "month") {
+      for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        out.push({ key: d.getFullYear() + "-" + pad2(d.getMonth() + 1),
+                   label: (d.getFullYear() % 100) + "-" + pad2(d.getMonth() + 1) });
+      }
+    } else {
+      for (let i = n - 1; i >= 0; i--) {
+        const y = now.getFullYear() - i;
+        out.push({ key: String(y), label: String(y) });
+      }
+    }
+    return out;
+  }
+
+  function rangeOptions(period) { return RANGES[period] || [7, 30, 90]; }
+  function rangeUnit(period) {
+    return { day: "天", week: "周", month: "个月", year: "年" }[period];
+  }
+
+  function syncRangeUi() {
+    const opts = rangeOptions(state.period);
+    if (!opts.includes(state.range)) state.range = opts[1] || opts[0];
+    $("wbRange").innerHTML = opts.map((n) =>
+      `<button class="seg-btn ${n === state.range ? "active" : ""}" type="button" data-range="${n}">近${n}${rangeUnit(state.period)}</button>`
+    ).join("");
+  }
+
+  function usageToolTotals(keys) {
+    // 当前区间内，每个工具的总量
+    const out = {};
+    const days = (state.usage && state.usage.days) || {};
+    const allowed = new Set(periodList(state.period, state.range).map((p) => p.key));
+    for (const day of Object.keys(days)) {
+      if (!allowed.has(periodKeyOf(day, state.period))) continue;
+      for (const [tool, b] of Object.entries(days[day])) {
+        out[tool] = (out[tool] || 0) + totalOf(b);
+      }
+    }
+    return out;
+  }
+
+  function primaryKeys() {
+    return state.tools.filter((t) => t.primary && t.installed).map((t) => t.key);
+  }
+  function foundKeys() {
+    return state.tools.filter((t) => !t.primary && t.installed && !t.empty)
+      .map((t) => t.key);
+  }
+  function foundHasUsage() {
+    const prim = new Set(primaryKeys());
+    const days = (state.usage && state.usage.days) || {};
+    for (const day of Object.keys(days)) {
+      for (const [tool, b] of Object.entries(days[day])) {
+        if (!prim.has(tool) && totalOf(b) > 0) return true;
+      }
+    }
+    return false;
+  }
+  function otherEnabled() {
+    return state.other && foundKeys().length > 0 && foundHasUsage();
+  }
+  function seriesKeys() {
+    const keys = primaryKeys().filter((k) => state.enabled.has(k));
+    if (otherEnabled()) keys.push("other");
+    return keys;
+  }
+  function keyLabel(k) {
+    return k === "other" ? `其他 AI（${foundKeys().length}）` : toolName(k);
+  }
+  function keyDot(k) { return k === "other" ? "other" : k; }
+  function keyColor(k) { return `rgb(var(--c-tool-${keyDot(k)}))`; }
+  function hasSeries() {
+    return state.enabled.size > 0 || otherEnabled();
+  }
+  function chipHtml(k, label, on) {
+    return `<button class="chip ${on ? "on" : ""}" type="button" data-chip="${esc(k)}">
+      <span class="tool-dot" data-tool="${keyDot(k)}"></span>${esc(label)}
+    </button>`;
+  }
+  function updateWorkbenchTools() {
+    if (!state.usage) return;
+    primaryKeys().forEach((k) => {
+      if (!state.knownPrimary.has(k)) {
+        state.knownPrimary.add(k);
+        state.enabled.add(k);
+      }
+    });
+    const found = foundKeys();
+    if (!found.length) state.other = false;
+    const chips = primaryKeys().map((k) => chipHtml(k, toolName(k), state.enabled.has(k)));
+    if (foundHasUsage()) chips.push(chipHtml("other", `其他 AI（${found.length}）`, state.other));
+    $("wbTools").innerHTML = chips.join("");
+  }
+
+  async function loadUsage(refresh, silent) {
+    const sub = $("wbSub");
+    if (!silent) {
+      sub.textContent = refresh ? "正在重新扫描所有会话文件…" : "正在读取 Token 用量…";
+    }
+    try {
+      const data = await api("/api/usage" + (refresh ? "?refresh=1" : ""));
+      state.usage = data;
+      sub.textContent = "数据生成于 " + new Date(data.generated * 1000).toLocaleString("zh-CN", { hour12: false });
+      updateWorkbenchTools();
+      renderWorkbench();
+      // 工作台扫描完成后，会话列表里的 Token 列才有值
+      if (state.view === "tool") { loadSessions(); loadStats(); }
+    } catch (e) {
+      sub.textContent = "读取失败：" + e.message;
+      if (!silent) toast("读取 Token 用量失败", e.message, "err");
+    }
+  }
+
+  function renderWorkbench() {
+    if (!state.usage) return;
+    renderChart();
+    renderToolRows();
+    renderModels();
+    renderNote();
+  }
+
+  function seriesData() {
+    const periods = periodList(state.period, state.range);
+    const map = new Map(periods.map((p) =>
+      [p.key, { key: p.key, label: p.label, tools: {}, total: 0 }]));
+    const prim = new Set(primaryKeys());
+    const days = (state.usage && state.usage.days) || {};
+    for (const day of Object.keys(days)) {
+      const slot = map.get(periodKeyOf(day, state.period));
+      if (!slot) continue;
+      for (const [tool, b] of Object.entries(days[day])) {
+        const v = totalOf(b);
+        if (prim.has(tool)) {
+          if (!state.enabled.has(tool)) continue;
+          slot.tools[tool] = (slot.tools[tool] || 0) + v;
+        } else {
+          if (!state.other) continue;
+          slot.tools.other = (slot.tools.other || 0) + v;
+        }
+        slot.total += v;
+      }
+    }
+    return [...map.values()];
+  }
+
+  function renderChart() {
+    const data = seriesData();
+    const enabled = seriesKeys();
+    const prim = new Set(primaryKeys());
+    const grand = data.reduce((a, s) => a + s.total, 0);
+    const max = Math.max(1, ...data.map((s) => s.total));
+
+    // 概览数字
+    let inp = 0, out = 0, cr = 0;
+    const days = (state.usage && state.usage.days) || {};
+    const allowed = new Set(periodList(state.period, state.range).map((p) => p.key));
+    for (const day of Object.keys(days)) {
+      if (!allowed.has(periodKeyOf(day, state.period))) continue;
+      for (const [tool, b] of Object.entries(days[day])) {
+        const on = prim.has(tool) ? state.enabled.has(tool) : state.other;
+        if (!on) continue;
+        inp += b.input || 0; out += b.output || 0; cr += b.cache_read || 0;
+      }
+    }
+    $("t1").textContent = tok(grand);
+    $("t1").nextElementSibling.textContent =
+      `近${state.range}${rangeUnit(state.period)} · ${num(data.filter((d) => d.total).length)} 个时间段有用量`;
+    $("t2").textContent = tok(inp);
+    $("t2").nextElementSibling.textContent = "未命中缓存的输入";
+    $("t3").textContent = tok(out);
+    $("t3").nextElementSibling.textContent = "模型输出";
+    $("t4").textContent = tok(cr);
+    const hit = (cr + inp) ? (cr / (cr + inp) * 100) : 0;
+    $("t4").nextElementSibling.textContent = "命中率 " + hit.toFixed(1) + "%";
+
+    $("wbChartDesc").textContent = enabled.length === 1
+      ? "仅 " + keyLabel(enabled[0]) + " · 按" + PERIOD_LABEL[state.period] : "";
+
+    // Y 轴
+    $("wbY").innerHTML = [1, 0.5, 0].map((f) =>
+      `<span>${f === 0 ? "0" : tok(max * f)}</span>`).join("");
+    $("wbGrid").innerHTML = [0, 50, 100].map((f) =>
+      `<span style="bottom:${f}%"></span>`).join("");
+
+    const maxLabels = innerWidth < 640 ? 4 : 8;
+    const step = Math.max(1, Math.ceil(data.length / maxLabels));
+    $("wbBars").innerHTML = data.map((s, i) => {
+      const pct = s.total / max * 100;
+      const segs = enabled.filter((k) => (s.tools[k] || 0) > 0).map((k) =>
+        `<div class="seg" data-tool="${keyDot(k)}" style="flex:${s.tools[k]};background:${keyColor(k)}"></div>`).join("");
+      return `<div class="bar-col" data-i="${i}" tabindex="0"
+                   aria-label="${esc(s.label)} ${tok(s.total)} tokens">
+        <div class="bar-stack" style="height:${Math.max(s.total ? 2 : 0, pct)}%">${segs}</div>
+      </div>`;
+    }).join("");
+    $("wbX").innerHTML = data.map((s, i) =>
+      `<span>${(i % step === 0 || i === data.length - 1) ? esc(s.label) : ""}</span>`).join("");
+
+    // 只给最高的和最近的一根直接标注
+    document.querySelectorAll("#wbBars .bar-total").forEach((n) => n.remove());
+    const marks = new Set();
+    let mi = -1;
+    data.forEach((s, i) => { if (mi < 0 || s.total > data[mi].total) mi = i; });
+    if (mi >= 0) marks.add(mi);
+    for (let i = data.length - 1; i >= 0; i--) { if (data[i].total > 0) { marks.add(i); break; } }
+    marks.forEach((i) => {
+      const s = data[i];
+      if (!s.total) return;
+      const col = document.querySelector(`#wbBars .bar-col[data-i="${i}"]`);
+      if (!col) return;
+      const label = document.createElement("span");
+      label.className = "bar-total";
+      label.style.bottom = Math.min(100, s.total / max * 100) + "%";
+      label.textContent = tok(s.total);
+      col.appendChild(label);
+    });
+
+    // 图例
+    if (enabled.length <= 1) {
+      $("wbLegend").innerHTML = "";
+    } else {
+      $("wbLegend").innerHTML = enabled.map((k) => {
+        const v = data.reduce((a, s) => a + (s.tools[k] || 0), 0);
+        return `<span class="legend-item"><span class="tool-dot" data-tool="${keyDot(k)}"></span>
+          ${esc(keyLabel(k))} <span class="legend-val">${tok(v)}</span>
+          <span class="text-faint">${grand ? (v / grand * 100).toFixed(1) + "%" : "—"}</span></span>`;
+      }).join("");
+    }
+
+    renderTableView(data, enabled);
+
+    if (!grand) {
+      $("wbBars").innerHTML = `<div class="flex h-full w-full items-center justify-center text-[12px] text-faint">
+        这个区间没有用量记录</div>`;
+    }
+  }
+
+  function renderTableView(data, enabled) {
+    const rows = [...data].reverse().filter((s) => s.total > 0);
+    $("wbTableWrap").innerHTML = rows.length ? `
+      <table class="data-table min-w-[520px]">
+        <thead class="table-head"><tr>
+          <th class="c-time">时间</th>
+          ${enabled.map((k) => `<th class="text-right">${esc(keyLabel(k))}</th>`).join("")}
+          <th class="c-tokens">合计</th>
+        </tr></thead>
+        <tbody>${rows.map((s) => `<tr class="row">
+          <td class="c-time">${esc(s.label)}</td>
+          ${enabled.map((k) => `<td class="c-tokens">${s.tools[k] ? tok(s.tools[k]) : "—"}</td>`).join("")}
+          <td class="c-tokens font-medium text-ink">${tok(s.total)}</td>
+        </tr>`).join("")}</tbody>
+      </table>` : `<div class="py-12 text-center text-[12px] text-faint">这个区间没有用量记录</div>`;
+  }
+
+  function renderToolRows() {
+    const totals = usageToolTotals();
+    const max = Math.max(1, ...Object.values(totals));
+    const grand = Object.values(totals).reduce((a, b) => a + b, 0) || 1;
+    $("wbToolRows").innerHTML = state.tools.filter((t) => !t.empty).map((t) => {
+      const dk = dotKeyOf(t);
+      const badges = [];
+      if (!t.primary) badges.push('<span class="nav-badge">已发现</span>');
+      if (t.readonly) badges.push('<span class="nav-badge">只读</span>');
+      if (!t.installed) {
+        return `<div class="tool-row opacity-60" data-tool="${dk}">
+          <span class="tool-dot" data-tool="${dk}"></span>
+          <div class="min-w-0 flex-1"><div class="text-[12.5px] font-medium">${esc(t.name)}</div>
+            <div class="text-[11px] text-faint">${esc(t.root)} 未安装</div></div>
+          <span class="nav-badge">未安装</span></div>`;
+      }
+      const v = totals[t.key] || 0;
+      const models = (t.models || []).slice(0, 3).map((m) => m.model).join(" · ");
+      return `<div class="tool-row" data-tool="${dk}">
+        <button class="flex min-w-0 flex-1 items-center gap-2.5 text-left" type="button" data-open-tool="${t.key}">
+          <span class="tool-dot" data-tool="${dk}"></span>
+          <span class="min-w-0">
+            <span class="flex items-center gap-1.5 text-[12.5px] font-medium">${esc(t.name)}${badges.join("")}</span>
+            <span class="block truncate text-[11px] text-faint">${t.sessions} 个会话${models ? " · " + esc(models) : ""}${t.via ? " · " + esc(t.via) : ""}</span>
+          </span>
+        </button>
+        <div class="share-track max-w-[180px]" data-tool="${dk}">
+          <div class="share-fill" data-tool="${dk}" style="width:${Math.max(v ? 2 : 0, v / max * 100)}%"></div>
+        </div>
+        <div class="w-[64px] shrink-0 text-right text-[12px] font-medium tabular-nums">${v ? tok(v) : "—"}</div>
+        <div class="w-[42px] shrink-0 text-right text-[11px] tabular-nums text-faint">${grand ? (v / grand * 100).toFixed(0) + "%" : "—"}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function renderModels() {
+    const rows = [];
+    for (const t of state.tools) {
+      if (!t.installed) continue;
+      for (const m of (t.models || [])) {
+        rows.push({ model: m.model, tool: t.key, primary: t.primary, tokens: m.tokens });
+      }
+    }
+    rows.sort((a, b) => b.tokens - a.tokens);
+    const top = rows.slice(0, 8);
+    const max = Math.max(1, ...top.map((r) => r.tokens));
+    $("wbModels").innerHTML = top.length ? top.map((r) => {
+      const dk = r.primary ? r.tool : "other";
+      return `
+      <div class="tool-row" data-tool="${dk}">
+        <span class="tool-dot" data-tool="${dk}"></span>
+        <div class="min-w-0 flex-1">
+          <div class="truncate font-mono text-[11.5px]" title="${esc(r.model)}">${esc(r.model)}</div>
+          <div class="text-[10.5px] text-faint">${esc(toolName(r.tool))}</div>
+        </div>
+        <div class="h-1.5 w-[26%] shrink-0 overflow-hidden rounded-full bg-surface-2">
+          <div class="h-full rounded-full" data-tool="${dk}" style="width:${Math.max(2, r.tokens / max * 100)}%;background:${keyColor(dk)}"></div>
+        </div>
+        <div class="w-[62px] shrink-0 text-right text-[12px] tabular-nums">${tok(r.tokens)}</div>
+      </div>`;
+    }).join("") : `<div class="px-4 py-8 text-center text-[12px] text-faint">还没有用量数据</div>`;
+  }
+
+  function renderNote() {
+    const approx = state.usage.tools.filter((t) => t.approximate).map((t) => t.name);
+    const missing = state.tools.filter((t) => !t.installed).map((t) => t.name);
+    const found = state.tools.filter((t) => !t.primary && t.installed && !t.empty);
+    const readonly = found.filter((t) => t.readonly).map((t) => t.name);
+    const bits = [];
+    if (found.length) bits.push(`扫描到 ${found.length} 个额外 AI 客户端：${found.map((t) => t.name).join("、")}。`);
+    if (readonly.length) bits.push(`${readonly.join("、")} 为只读发现，暂不支持删除。`);
+    if (approx.length) bits.push(`${approx.join("、")} 的 token 按会话最后活动时间估算（解压组件不可用）。`);
+    if (missing.length) bits.push(`${missing.join("、")} 未安装，未计入统计。`);
+    bits.push("首次统计会扫描全部会话文件，之后只解析有变化的文件。");
+    $("wbNote").textContent = bits.join(" ");
+  }
+
+  // 图表 tooltip
+  const tip = $("chartTip");
+  function showTip(e, idx) {
+    const data = seriesData();
+    const s = data[idx];
+    if (!s) return;
+    const enabled = seriesKeys();
+    const rows = enabled.filter((k) => s.tools[k]).map((k) =>
+      `<div class="chart-tip-row"><span class="tool-dot" data-tool="${keyDot(k)}"></span>
+        <span class="flex-1 text-muted">${esc(keyLabel(k))}</span><b>${tok(s.tools[k])}</b></div>`).join("");
+    tip.innerHTML = `<div class="mb-1 text-[11px] font-semibold text-ink">${esc(s.label)}</div>
+      ${rows || '<div class="text-faint">无用量</div>'}
+      <div class="mt-1 flex justify-between border-t border-line pt-1 text-[11px] text-muted">
+        合计 <b class="text-ink">${tok(s.total)}</b></div>`;
+    tip.classList.remove("d-none");
+    const pad = 12, w = tip.offsetWidth, h = tip.offsetHeight;
+    let x = e.clientX + 14, y = e.clientY - h - 10;
+    if (x + w > innerWidth - pad) x = e.clientX - w - 14;
+    if (y < pad) y = e.clientY + 16;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+  function hideTip() { tip.classList.add("d-none"); }
+
+  $("wbBars").addEventListener("mousemove", (e) => {
+    const col = e.target.closest(".bar-col");
+    if (!col) return hideTip();
+    showTip(e, Number(col.getAttribute("data-i")));
+  });
+  $("wbBars").addEventListener("mouseleave", hideTip);
+  $("wbBars").addEventListener("focusin", (e) => {
+    const col = e.target.closest(".bar-col");
+    if (!col) return;
+    const r = col.getBoundingClientRect();
+    showTip({ clientX: r.left + r.width / 2, clientY: r.top }, Number(col.getAttribute("data-i")));
+  });
+  $("wbBars").addEventListener("focusout", hideTip);
+  window.addEventListener("scroll", hideTip, true);
+
+  $("wbPeriod").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-period]");
+    if (!b) return;
+    state.period = b.getAttribute("data-period");
+    document.querySelectorAll("#wbPeriod .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    syncRangeUi();
+    renderChart();
+  });
+  $("wbRange").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-range]");
+    if (!b) return;
+    state.range = Number(b.getAttribute("data-range"));
+    syncRangeUi();
+    renderChart();
+  });
+  $("wbMode").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-mode]");
+    if (!b) return;
+    state.chartMode = b.getAttribute("data-mode");
+    document.querySelectorAll("#wbMode .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
+    $("wbChartWrap").classList.toggle("d-none", state.chartMode !== "chart");
+    $("wbTableWrap").classList.toggle("d-none", state.chartMode !== "table");
+  });
+  $("wbTools").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-chip]");
+    if (!b) return;
+    const k = b.getAttribute("data-chip");
+    if (k === "other") {
+      if (state.other && state.enabled.size === 0) return;
+      state.other = !state.other;
+    } else if (state.enabled.has(k)) {
+      if (state.enabled.size === 1 && !(state.other && foundKeys().length)) return;
+      state.enabled.delete(k);
+    } else {
+      state.enabled.add(k);
+    }
+    updateWorkbenchTools();
+    renderWorkbench();
+  });
+  $("wbToolRows").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-open-tool]");
+    if (b) openTool(b.getAttribute("data-open-tool"));
+  });
+  $("btnRescan").onclick = () => loadUsage(true);
+  $("btnScan").onclick = async () => {
+    try {
+      const d = await loadTools(true);
+      await loadUsage(false);
+      const found = d.tools.filter((t) => !t.primary);
+      toast("扫描完成", found.length
+        ? "发现 " + found.length + " 个额外客户端：" + found.map((t) => t.name).join("、")
+        : "目前只检测到固定的 5 个客户端", "ok");
+    } catch (e) {
+      toast("扫描失败", e.message, "err");
+    }
+  };
+  $("btnRefresh").onclick = async () => {
+    await loadTools();
+    if (state.view === "workbench") await loadUsage(false);
+    else if (state.view === "tool") await Promise.all([loadSessions(), loadTrash(), loadStats()]);
+    toast("已刷新", "", "ok");
+  };
+
+  // ---------- 自动重新扫描（手动雷达按钮仍然保留，随时可立即扫） ----------
+  const AUTO_KEY = "aism-auto-scan";
+  let autoTimer = null;
+  let autoBusy = false;
+
+  function setAutoScan(sec, save) {
+    state.autoSec = sec;
+    if (save !== false) {
+      try { localStorage.setItem(AUTO_KEY, String(sec)); } catch (e) {}
+    }
+    if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+    if (sec > 0) autoTimer = setInterval(autoScanTick, sec * 1000);
+  }
+
+  async function autoScanTick() {
+    if (document.hidden || autoBusy) return;
+    autoBusy = true;
+    try {
+      await loadTools(true);
+      if (state.view === "workbench") {
+        await loadUsage(false, true);
+      } else if (state.view === "tool") {
+        // 重新拉当前工具的会话；保持滚动位置，别把人看的地方弹回顶部
+        const main = document.querySelector(".app-main");
+        const doc = document.scrollingElement;
+        const top = main ? main.scrollTop : 0;
+        const docTop = doc ? doc.scrollTop : 0;
+        await Promise.all([loadSessions(), loadStats()]);
+        if (main) main.scrollTop = top;
+        if (doc) doc.scrollTop = docTop;
+        if (state.tab === "trash") await loadTrash();
+      }
+    } catch (e) {
+      // 自动刷新失败不打扰用户，等下一轮
+    } finally {
+      autoBusy = false;
+    }
+  }
+
+  $("autoScan").onchange = (e) => {
+    const sec = parseInt(e.target.value, 10) || 0;
+    setAutoScan(sec);
+    toast(sec ? "自动扫描已开启" : "已关闭自动扫描",
+          sec ? (sec >= 60 ? "每 1 分钟重新扫描一次" : `每 ${sec} 秒重新扫描一次`) : "", "ok");
+  };
+
+  (() => {
+    let saved = state.autoSec;
+    try {
+      const v = localStorage.getItem(AUTO_KEY);
+      if (v !== null) saved = parseInt(v, 10);
+    } catch (e) {}
+    if ([0, 10, 15, 30, 60].indexOf(saved) < 0) saved = 30;
+    $("autoScan").value = String(saved);
+    setAutoScan(saved, false);
+  })();
+
+  // ============================================================
+  //  会话
+  // ============================================================
   function selectedRows() {
     return state.sessions.filter((s) => state.selected.has(s.id));
   }
 
-  // 勾选/取消一行；range=true 时把「上次点的行」到这一行之间的会话一起勾上（Shift 连选）
   function toggleRow(id, on, range) {
     const list = state.sessions;
     const idx = list.findIndex((s) => s.id === id);
@@ -490,82 +1268,57 @@
     renderSessions();
   }
 
-  function renderSummary(data) {
-    $("summary").textContent = `${data.total} 个会话 · 共 ${data.total_size_str}`;
-    $("cntSessions").textContent = data.total;
-    $("rootPath").textContent = data.root || "";
-    syncHeadHeight();
-  }
-
-  // ---------- 排序 ----------
-  function sortValue(s, key) {
-    if (key === "size") return s.size;
-    if (key === "lines") return s.lines == null ? -1 : s.lines;
-    if (key === "project") return s.project_short || "";
-    if (key === "title") return s.title || "";
-    return s.mtime;
-  }
-
-  function sortSessions(list) {
-    const key = state.sortKey;
-    const dir = state.sortDir;
-    const text = TEXT_SORTS.has(key);
-    return [...list].sort((a, b) => {
-      const x = sortValue(a, key);
-      const y = sortValue(b, key);
-      let c = text ? String(x).localeCompare(String(y), "zh-Hans-CN") : x - y;
-      if (c === 0) c = b.mtime - a.mtime;  // 同值时新的在前，保证顺序稳定
-      return c * dir;
+  async function loadSessions() {
+    if (!state.tool) return;
+    const params = new URLSearchParams({
+      tool: state.tool,
+      q: $("q").value.trim(),
+      project: $("proj").value || "",
+      sort: state.sort,
+      untitled: $("untitledOnly").checked ? "1" : "0",
     });
-  }
-
-  // 表头上的升降序小箭头
-  function syncSortUi() {
-    document.querySelectorAll("#tab-sessions thead th[data-sort]").forEach((th) => {
-      const on = th.getAttribute("data-sort") === state.sortKey;
-      th.setAttribute("aria-sort", on ? (state.sortDir > 0 ? "ascending" : "descending") : "none");
-    });
-    const sel = $("sort");
-    if ([...sel.options].some((o) => o.value === state.sortKey)) sel.value = state.sortKey;
-  }
-
-  function applySort() {
-    state.sessions = sortSessions(state.sessions);
-    state.lastIdx = null;   // 顺序变了，Shift 连选的锚点失效
-    renderSessions();
-  }
-
-  function changeSort(key) {
-    if (state.sortKey === key) state.sortDir = -state.sortDir;
-    else { state.sortKey = key; state.sortDir = TEXT_SORTS.has(key) ? 1 : -1; }
-    applySort();
+    try {
+      const data = await api("/api/sessions?" + params);
+      state.sessions = data.sessions;
+      state.lastIdx = null;
+      const ids = new Set(state.sessions.map((s) => s.id));
+      for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
+      $("summary").textContent = `${data.total} 个会话 · ${data.total_size_str}` +
+        (data.total_tokens ? ` · ${tok(data.total_tokens)} tokens` : "");
+      $("cntSessions").textContent = data.total;
+      renderSessions();
+    } catch (e) {
+      toast("读取会话失败", e.message, "err");
+    }
   }
 
   function renderSessions() {
-    const tb = $("rows");
     const list = state.sessions;
     $("emptySessions").classList.toggle("d-none", list.length > 0);
-    tb.innerHTML = list.map((s) => {
+    $("rows").innerHTML = list.map((s) => {
       const sel = state.selected.has(s.id);
+      const tk = s.tokens ? totalOf(s.tokens) : 0;
       return `<tr data-id="${esc(s.id)}" class="row ${sel ? "is-sel" : ""} ${s.live ? "is-live" : ""}">
-        <td class="c-check"><input type="checkbox" data-check="${esc(s.id)}" ${sel ? "checked" : ""} ${s.live ? "disabled" : ""}></td>
+        <td class="c-check"><input type="checkbox" data-check="${esc(s.id)}" ${sel ? "checked" : ""} ${(s.live || state.readonly) ? "disabled" : ""}></td>
         <td class="c-time">${esc(s.mtime_str)}</td>
+        <td class="c-tokens ${tk ? "" : "text-faint"}">${tk ? tok(tk) : "—"}</td>
         <td class="c-size">${esc(s.size_str)}</td>
-        <td class="c-lines">${s.lines == null ? "—" : s.lines}</td>
         <td class="c-proj" title="${esc(s.project)}">${esc(s.project_short)}</td>
         <td>
-          <span class="t-title ${s.untitled ? "untitled" : ""}" data-open="${esc(s.id)}"
-                title="${esc(s.title || "（无标题）")}">${esc(s.title || "（无标题）")}</span>
-          ${s.live ? '<span class="badge badge-live ml-1.5">当前会话</span>' : ""}
+          <div class="flex min-w-0 items-center gap-1.5">
+            <span class="t-title min-w-0 flex-1 ${s.untitled ? "untitled" : ""}" data-open="${esc(s.id)}"
+                  title="${esc(s.title || "（无标题）")}">${esc(s.title || "（无标题）")}</span>
+            ${s.live ? '<span class="badge badge-live shrink-0">当前会话</span>' : ""}
+            ${s.note ? `<span class="badge badge-warn shrink-0">${esc(s.note)}</span>` : ""}
+          </div>
         </td>
         <td class="c-act"><span class="rowact">
           <button type="button" class="row-btn" data-open="${esc(s.id)}">详情</button>
-          <button type="button" class="row-btn row-btn-danger" data-del="${esc(s.id)}" ${s.live ? "disabled" : ""}>删除</button>
+          <button type="button" class="row-btn row-btn-danger" data-del="${esc(s.id)}" ${(s.live || state.readonly) ? "disabled" : ""}>删除</button>
         </span></td>
       </tr>`;
     }).join("");
     syncSelectionUi();
-    syncSortUi();
   }
 
   function syncSelectionUi() {
@@ -575,95 +1328,101 @@
     $("selSize").textContent = human(total);
     $("selbar").classList.toggle("d-none", rows.length === 0);
     const batch = $("btnBatchDel");
-    batch.disabled = rows.length === 0;
-    batch.textContent = rows.length ? `批量删除 (${rows.length})` : "批量删除";
+    batch.disabled = rows.length === 0 || state.readonly;
+    batch.textContent = state.readonly ? "只读发现"
+      : (rows.length ? `批量删除 (${rows.length})` : "批量删除");
     const all = $("selAll");
-    const selectable = state.sessions.filter((s) => !s.live);
+    const selectable = state.readonly ? [] : state.sessions.filter((s) => !s.live);
+    all.disabled = state.readonly;
     all.checked = selectable.length > 0 && rows.length === selectable.length;
     all.indeterminate = rows.length > 0 && rows.length < selectable.length;
   }
 
-  function human(n) {
-    const u = ["B", "K", "M", "G", "T"];
-    let i = 0;
-    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-    return (i === 0 ? Math.round(n) : n.toFixed(1)) + u[i];
-  }
-
-  async function loadSessions() {
-    const params = new URLSearchParams({
-      q: $("q").value.trim(),
-      project: $("proj").value,
-      sort: ["time", "size", "lines"].includes(state.sortKey) ? state.sortKey : "time",
-      untitled: $("untitledOnly").checked ? "1" : "0",
-    });
-    try {
-      const data = await api("/api/sessions?" + params);
-      state.sessions = sortSessions(data.sessions);
-      state.lastIdx = null;
-      const ids = new Set(state.sessions.map((s) => s.id));
-      for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
-      renderSummary(data);
-      renderSessions();
-    } catch (e) {
-      toast("读取会话失败", e.message, "err");
-    }
-  }
-
-  async function refreshAll() {
-    await Promise.all([loadSessions(), loadTrash(), loadStats()]);
-  }
-
   // ---------- 回收站 ----------
   async function loadTrash() {
+    if (!state.tool) return;
     try {
-      const data = await api("/api/trash");
+      const data = await api("/api/trash?tool=" + state.tool);
       state.trash = data.items;
       $("cntTrash").textContent = data.items.length;
       $("trashCount").textContent = data.items.length + " 个";
       $("trashSize").textContent = data.items.length ? "共 " + data.total_size_str : "";
+      $("trashHint").textContent = state.readonly
+        ? "这个客户端是只读发现，没有回收站。"
+        : ((state.toolMap[state.tool] && state.toolMap[state.tool].kind === "soft")
+          ? "这个工具用应用内的软删除；恢复后重新打开应用即可看到。"
+          : "删除的会话先放到这里，可随时恢复。");
       $("emptyTrash").classList.toggle("d-none", data.items.length > 0);
       $("trashRows").innerHTML = data.items.map((t) => `
         <tr class="row">
           <td class="c-time">${esc(t.deleted_at)}</td>
           <td class="c-size">${esc(t.size_str)}</td>
-          <td class="c-proj" title="${esc(t.original_path)}">${esc(t.project_short)}</td>
+          <td class="c-proj" title="${esc(t.original_path)}">${esc(t.original_path ? t.original_path.split(/[\\/]/).slice(-2).join("\\") : "")}</td>
           <td><span class="t-title ${t.title ? "" : "untitled"}"
               title="${esc(t.title || "（无标题）")}">${esc(t.title || "（无标题）")}</span></td>
           <td class="c-act"><button type="button" class="row-btn !text-success hover:!border-success/30 hover:!bg-success/10"
-              data-restore="${esc(t.name)}">恢复</button></td>
+              data-restore="${esc(t.token)}">恢复</button></td>
         </tr>`).join("");
     } catch (e) {
       toast("读取回收站失败", e.message, "err");
     }
   }
 
+  async function restoreToken(token) {
+    try {
+      const res = await post("/api/restore", { tool: state.tool, tokens: [token] });
+      if (res.errors && res.errors.length) toast("恢复失败", res.errors.join("\n"), "err");
+      else toast("已恢复", "", "ok");
+      await Promise.all([loadTools(), loadTrash(), loadSessions()]);
+    } catch (e) {
+      toast("恢复失败", e.message, "err");
+    }
+  }
+
+  async function emptyTrash() {
+    if (!state.trash.length) return;
+    const size = state.trash.reduce((a, t) => a + t.size, 0);
+    const ok = await confirmBox({
+      title: "清空回收站",
+      message: `将永久删除回收站里的 <b>${state.trash.length}</b> 个条目（<b>${human(size)}</b>）。`,
+      danger: true, requireAck: true, confirmText: "永久清空",
+    });
+    if (!ok) return;
+    try {
+      const res = await post("/api/empty-trash", { tool: state.tool });
+      toast("回收站已清空", `删除 ${res.removed} 个，释放 ${res.freed_str || "0B"}`, "ok");
+      await Promise.all([loadTools(), loadTrash(), loadSessions()]);
+    } catch (e) {
+      toast("清空失败", e.message, "err");
+    }
+  }
+
   // ---------- 统计 ----------
   async function loadStats() {
+    if (!state.tool) return;
     try {
-      const data = await api("/api/stats");
-      state.stats = data;
+      const data = await api("/api/stats?tool=" + state.tool);
       const max = Math.max(1, ...data.groups.map((g) => g.size));
-      const tile = (label, value, unit) => `
-        <div class="card px-4 py-3">
-          <div class="text-[10.5px] font-semibold uppercase tracking-wider text-faint">${label}</div>
-          <div class="mt-0.5 text-[21px] font-semibold leading-7 tabular-nums tracking-tight">${value}
-            ${unit ? `<span class="text-[12px] font-normal text-muted">${unit}</span>` : ""}</div>
-        </div>`;
-      $("statTotal").innerHTML =
-        tile("会话总数", data.total) +
-        tile("占用空间", esc(data.total_size_str)) +
-        tile("回收站", data.trash_count, `个 · ${esc(data.trash_size_str)}`);
+      const accent = `rgb(var(--c-tool-${state.tool}))`;
+      $("statTotal").innerHTML = `
+        <div class="tile"><div class="tile-label">会话总数</div><div class="tile-value">${data.total}</div>
+          <div class="tile-sub">${esc(state.toolMap[state.tool] ? state.toolMap[state.tool].name : "")}</div></div>
+        <div class="tile"><div class="tile-label">占用空间</div><div class="tile-value">${esc(data.total_size_str)}</div>
+          <div class="tile-sub">${data.groups.length} 个项目</div></div>
+        <div class="tile"><div class="tile-label">回收站</div><div class="tile-value">${data.trash_count}</div>
+          <div class="tile-sub">${esc(data.trash_size_str)}</div></div>`;
       $("statRows").innerHTML = data.groups.map((g) => `
         <div class="flex items-center gap-4 border-t border-line px-4 py-2.5 first:border-t-0">
           <div class="min-w-0 flex-1 truncate text-[13px]" title="${esc(g.project)}">${esc(g.project_short)}
             ${g.live ? '<span class="badge badge-live ml-1.5">当前</span>' : ""}</div>
-          <div class="h-1.5 w-[32%] max-w-[380px] shrink-0 overflow-hidden rounded-full bg-surface-2">
-            <div class="h-full rounded-full bg-accent" style="width:${Math.max(1.5, g.size / max * 100)}%"></div></div>
-          <div class="w-[74px] shrink-0 text-right text-[12.5px] tabular-nums">${esc(g.size_str)}</div>
+          <div class="h-1.5 w-[28%] max-w-[340px] shrink-0 overflow-hidden rounded-full bg-surface-2">
+            <div class="h-full rounded-full" style="width:${Math.max(1.5, g.size / max * 100)}%;background:${accent}"></div></div>
+          <div class="w-[70px] shrink-0 text-right text-[12.5px] tabular-nums">${esc(g.size_str)}</div>
           <div class="w-[52px] shrink-0 text-right text-[12px] tabular-nums text-muted">${g.count} 个</div>
-          <div class="hidden w-[112px] shrink-0 text-right text-[11.5px] tabular-nums text-faint sm:block">${esc(g.latest_str)}</div>
+          <div class="hidden w-[106px] shrink-0 text-right text-[11.5px] tabular-nums text-faint sm:block">${esc(g.latest_str)}</div>
         </div>`).join("");
+      state.stats = data;
+      fillProjects();
     } catch (e) {
       toast("读取统计失败", e.message, "err");
     }
@@ -671,10 +1430,7 @@
 
   // ---------- 项目下拉（可搜索） ----------
   const TS_OPTIONS = {
-    create: false,
-    maxItems: 1,
-    allowEmptyOption: true,
-    placeholder: "全部项目",
+    create: false, maxItems: 1, allowEmptyOption: true, placeholder: "全部项目",
     plugins: ["clear_button"],
     render: { no_results: () => '<div class="no-results">没有匹配的项目</div>' },
   };
@@ -682,8 +1438,7 @@
   const tsCProj = new TomSelect("#cProj", TS_OPTIONS);
 
   function fillProjects() {
-    if (!state.stats) return;
-    const groups = state.stats.groups;
+    const groups = (state.stats && state.stats.groups) || [];
     [tsProj, tsCProj].forEach((ts) => {
       const keep = ts.getValue();
       ts.clearOptions();
@@ -692,7 +1447,6 @@
       ts.refreshOptions(false);
       const valid = keep && groups.some((g) => g.project === keep);
       ts.setValue(valid ? keep : "", true);
-      if (ts === tsProj && !valid && keep) loadSessions();
     });
   }
 
@@ -709,6 +1463,10 @@
 
   async function doDelete(ids, purge) {
     if (!ids.length) return;
+    if (state.readonly) {
+      toast("只读发现", "这个客户端的数据格式暂不支持删除。", "err");
+      return;
+    }
     const rows = state.sessions.filter((s) => ids.includes(s.id));
     const size = rows.reduce((a, s) => a + s.size, 0);
     const ok = await confirmBox({
@@ -716,17 +1474,15 @@
       message: `将${purge ? "<b>永久删除</b>" : "移入回收站"} <b>${ids.length}</b> 个会话，共 <b>${human(size)}</b>。` +
         (purge ? "" : "<br>之后可在「回收站」标签里恢复。"),
       items: rows.map((s) => s.title || "（无标题）"),
-      danger: purge,
-      requireAck: purge,
+      danger: purge, requireAck: purge,
       confirmText: purge ? "永久删除" : "移入回收站",
     });
     if (!ok) return;
     try {
-      const res = await post("/api/delete", { ids, purge });
+      const res = await post("/api/delete", { tool: state.tool, ids, purge });
       state.selected.clear();
       reportDelete(res, purge);
-      await refreshAll();
-      fillProjects();
+      await Promise.all([loadTools(), loadSessions(), loadTrash(), loadStats()]);
     } catch (e) {
       toast("删除失败", e.message, "err");
     }
@@ -735,21 +1491,33 @@
   // ---------- 详情 ----------
   async function openDetail(id) {
     try {
-      const d = await api("/api/show?id=" + encodeURIComponent(id));
+      const d = await api(`/api/show?tool=${encodeURIComponent(state.tool)}&id=${encodeURIComponent(id)}`);
+      const tkc = d.tokens;
+      const tokRow = tkc ? `
+        <dt class="text-muted">Token</dt>
+        <dd class="tabular-nums">${num(totalOf(tkc))}
+          <span class="text-[11px] text-muted">（输入 ${tok(tkc.input)} · 输出 ${tok(tkc.output)} · 缓存读 ${tok(tkc.cache_read)}）</span></dd>` : "";
       $("detailTitle").textContent = d.title || "（无标题）";
       $("detailBody").innerHTML = `
         <dl class="grid grid-cols-[72px_minmax(0,1fr)] gap-x-3 gap-y-2.5 text-[12.5px]">
+          <dt class="text-muted">工具</dt>
+          <dd><span class="inline-flex items-center gap-1.5"><span class="tool-dot" data-tool="${esc(d.tool)}"></span>${esc(d.tool_name || toolName(d.tool))}</span></dd>
           <dt class="text-muted">会话 ID</dt>
           <dd class="break-all font-mono text-[11.5px]">${esc(d.id)}
             ${d.live ? '<span class="badge badge-live ml-1">当前会话</span>' : ""}</dd>
           <dt class="text-muted">项目</dt>
           <dd class="break-all">${esc(d.cwd || "（未知）")}</dd>
           <dt class="text-muted">时间</dt>
-          <dd class="tabular-nums">${esc(d.start_ts)} → ${esc(d.end_ts)}</dd>
+          <dd class="tabular-nums">${esc(d.start_ts || "—")} → ${esc(d.end_ts || "—")}</dd>
           <dt class="text-muted">大小</dt>
-          <dd class="tabular-nums">${esc(d.size_str)} · ${d.lines == null ? "—" : d.lines} 行</dd>
+          <dd class="tabular-nums">${esc(d.size_str)}${d.lines != null ? " · " + d.lines + " 行" : ""}</dd>
+          ${tokRow}
           <dt class="text-muted">消息</dt>
-          <dd>用户 ${d.users} 条 / 助手 ${d.asst} 条${d.dur ? " · " + esc(d.dur) : ""}</dd>
+          <dd>${d.users != null ? "用户 " + d.users + " 条" : (d.messages != null ? d.messages + " 条消息" : "—")}
+            ${d.asst != null ? " / 助手 " + d.asst + " 条" : ""}${d.dur ? " · " + esc(d.dur) : ""}
+            ${d.turns ? " · " + d.turns + " 回合" : ""}</dd>
+          ${d.models && d.models.length ? `<dt class="text-muted">模型</dt>
+            <dd class="break-all font-mono text-[11.5px]">${esc(d.models.join(" · "))}</dd>` : ""}
           ${d.cost != null ? `<dt class="text-muted">成本</dt>
             <dd class="tabular-nums">$${Number(d.cost).toFixed(4)}</dd>` : ""}
           <dt class="text-muted">文件</dt>
@@ -763,13 +1531,13 @@
           <div class="mb-1 text-[11px] font-medium uppercase tracking-wider text-faint">末条提问</div>
           <div class="max-h-[190px] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-line bg-surface-2 p-2.5 text-[12px] leading-relaxed">${esc(d.last_text)}</div>
         </div>` : ""}
-        <div class="mt-4">
+        ${d.resume ? `<div class="mt-4">
           <div class="mb-1 text-[11px] font-medium uppercase tracking-wider text-faint">继续这个会话</div>
           <div class="flex gap-2">
             <input class="field font-mono" readonly value="${esc(d.resume)}">
             <button type="button" class="btn-ghost shrink-0" data-copy="${esc(d.resume)}">复制</button>
           </div>
-        </div>`;
+        </div>` : ""}`;
       openDetailPanel();
     } catch (e) {
       toast("读取详情失败", e.message, "err");
@@ -787,6 +1555,7 @@
   // ---------- 批量清理 ----------
   function cleanBody(dryRun) {
     return {
+      tool: state.tool,
       older_days: Number($("cDays").value) || 0,
       bigger_mb: Number($("cMb").value) || 0,
       keep_last: Number($("cKeep").value) || 0,
@@ -829,12 +1598,10 @@
     if (!count) return;
     const ok = await confirmBox({
       title: purge ? "永久删除匹配的会话" : "清理匹配的会话",
-      message: `将${purge ? "<b>永久删除</b>" : "移入回收站"} <b>${count}</b> 个会话，共 <b>${human(size)}</b>。` +
-        (purge ? "" : "<br>之后可在「回收站」标签里恢复。"),
+      message: `将${purge ? "<b>永久删除</b>" : "移入回收站"} <b>${count}</b> 个会话，共 <b>${human(size)}</b>。`,
       items: state.preview.slice(0, 40).map((s) => s.title || "（无标题）")
         .concat(state.preview.length > 40 ? ["…"] : []),
-      danger: purge,
-      requireAck: purge,
+      danger: purge, requireAck: purge,
       confirmText: purge ? "永久删除" : "执行清理",
     });
     if (!ok) return;
@@ -843,45 +1610,9 @@
       reportDelete(res, purge);
       $("previewBox").classList.add("d-none");
       state.preview = [];
-      await refreshAll();
-      fillProjects();
+      await Promise.all([loadTools(), loadSessions(), loadTrash(), loadStats()]);
     } catch (e) {
       toast("清理失败", e.message, "err");
-    }
-  }
-
-  // ---------- 回收站操作 ----------
-  async function restore(names) {
-    try {
-      const res = await post("/api/restore", { names });
-      if (res.errors && res.errors.length) {
-        toast("部分恢复失败", res.errors.join("\n"), "err");
-      } else {
-        toast("已恢复 " + res.restored.length + " 个会话", "", "ok");
-      }
-      await refreshAll();
-    } catch (e) {
-      toast("恢复失败", e.message, "err");
-    }
-  }
-
-  async function emptyTrash() {
-    if (!state.trash.length) return;
-    const size = state.trash.reduce((a, t) => a + t.size, 0);
-    const ok = await confirmBox({
-      title: "清空回收站",
-      message: `将永久删除回收站里的 <b>${state.trash.length}</b> 个文件（<b>${human(size)}</b>），文件不会被真正擦除。`,
-      danger: true,
-      requireAck: true,
-      confirmText: "永久清空",
-    });
-    if (!ok) return;
-    try {
-      const res = await post("/api/empty-trash", {});
-      toast("回收站已清空", `删除 ${res.removed} 个文件，释放 ${res.freed_str}`, "ok");
-      await refreshAll();
-    } catch (e) {
-      toast("清空失败", e.message, "err");
     }
   }
 
@@ -892,21 +1623,8 @@
     qTimer = setTimeout(loadSessions, 220);
   });
   $("proj").addEventListener("change", loadSessions);
-  $("sort").addEventListener("change", () => {
-    state.sortKey = $("sort").value;
-    state.sortDir = TEXT_SORTS.has(state.sortKey) ? 1 : -1;
-    applySort();
-  });
-  // 点表头排序，再点同一列反向
-  document.querySelectorAll("#tab-sessions thead th[data-sort]").forEach((th) => {
-    th.addEventListener("click", () => changeSort(th.getAttribute("data-sort")));
-  });
+  $("sort").addEventListener("change", () => { state.sort = $("sort").value; loadSessions(); });
   $("untitledOnly").addEventListener("change", loadSessions);
-  $("btnRefresh").onclick = async () => {
-    await refreshAll();
-    fillProjects();
-    toast("已刷新", "", "ok");
-  };
 
   $("rows").addEventListener("click", (e) => {
     const open = e.target.closest("[data-open]");
@@ -914,7 +1632,6 @@
     const del = e.target.closest("[data-del]");
     if (del && !del.disabled) { doDelete([del.getAttribute("data-del")], false); return; }
     if (e.target.closest("button, input, a, label")) return;
-    // 点整行即可勾选（标题、详情、删除按钮除外），Shift+点击 = 连续选中
     const tr = e.target.closest("tr[data-id]");
     if (!tr) return;
     const id = tr.getAttribute("data-id");
@@ -926,10 +1643,9 @@
     toggleRow(cb.getAttribute("data-check"), cb.checked, e.shiftKey);
   });
   $("selAll").addEventListener("change", (e) => {
+    if (state.readonly) return;
     state.selected.clear();
-    if (e.target.checked) {
-      state.sessions.forEach((s) => { if (!s.live) state.selected.add(s.id); });
-    }
+    if (e.target.checked) state.sessions.forEach((s) => { if (!s.live) state.selected.add(s.id); });
     renderSessions();
   });
   $("btnClearSel").onclick = () => { state.selected.clear(); state.lastIdx = null; renderSessions(); };
@@ -939,7 +1655,7 @@
 
   $("trashRows").addEventListener("click", (e) => {
     const b = e.target.closest("[data-restore]");
-    if (b) restore([b.getAttribute("data-restore")]);
+    if (b) restoreToken(b.getAttribute("data-restore"));
   });
   $("btnEmptyTrash").onclick = emptyTrash;
 
@@ -951,24 +1667,41 @@
     }
   });
 
-  // 标签页
-  $("tabs").addEventListener("click", (e) => {
+  $("toolTabs").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-tab]");
-    if (!b) return;
-    state.tab = b.getAttribute("data-tab");
-    document.querySelectorAll("#tabs button").forEach((x) =>
-      x.classList.toggle("active", x === b));
-    document.querySelectorAll("main > section").forEach((sec) =>
-      sec.classList.toggle("d-none", sec.id !== "tab-" + state.tab));
-    if (state.tab === "trash") loadTrash();
-    if (state.tab === "stats") loadStats();
+    if (b) setTab(b.getAttribute("data-tab"));
   });
+
+  $("sideNav").addEventListener("click", (e) => {
+    const v = e.target.closest("[data-view]");
+    if (v) {
+      showView("workbench");
+      if (!state.usage) loadUsage(false);
+      return;
+    }
+    const t = e.target.closest("[data-tool]");
+    if (t) openTool(t.getAttribute("data-tool"));
+  });
+
+  // 客户端窗口关闭时告诉本地服务可以退出了（普通浏览器页面不发，服务也只认 app=1）
+  if (new URLSearchParams(location.search).get("app") === "1") {
+    window.addEventListener("pagehide", () => {
+      try { navigator.sendBeacon("/api/bye?app=1"); } catch (e) {}
+    });
+  }
 
   // 启动
   applyTheme(savedTheme());
-  syncHeadHeight();
-  document.fonts && document.fonts.ready.then(syncHeadHeight);
-  refreshAll().then(fillProjects);
+  syncRangeUi();
+  (async () => {
+    try {
+      await loadTools();
+    } catch (e) {
+      toast("读取工具列表失败", e.message, "err");
+    }
+    showView("workbench");
+    await loadUsage(false);
+  })();
 })();
 </script>
 </body>

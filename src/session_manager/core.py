@@ -506,6 +506,8 @@ def filter_live(sel, args) -> list:
 # ---------- 子命令 ----------
 
 def cmd_list(args):
+    if getattr(args, "tool", "claude") != "claude" or args.sort == "tokens":
+        return _prov_list(args)
     rows = scan(args, project=args.project)
     if args.here:
         rows = here_filter(rows)
@@ -532,11 +534,15 @@ def cmd_list(args):
 
 
 def cmd_show(args):
+    if getattr(args, "tool", "claude") != "claude":
+        return _prov_show(args)
     rows = scan(args)
     show_one(resolve(args, args.id, rows))
 
 
 def cmd_del(args):
+    if getattr(args, "tool", "claude") != "claude":
+        return _prov_del(args)
     rows = scan(args, project=getattr(args, "project", None))
     targets, seen = [], set()
     for t in args.ids:
@@ -572,6 +578,8 @@ def parse_size(s: str) -> int:
 
 
 def cmd_clean(args):
+    if getattr(args, "tool", "claude") != "claude":
+        return _prov_clean(args)
     rows = scan(args, project=args.project)
     if args.here:
         rows = here_filter(rows)
@@ -711,6 +719,8 @@ def cmd_empty(args):
 
 
 def cmd_stats(args):
+    if getattr(args, "tool", "claude") != "claude":
+        return _prov_stats(args)
     rows = scan(args, project=args.project)
     if not rows:
         print("没有会话记录。")
@@ -796,6 +806,221 @@ def cmd_interactive(args):
 
 # ---------- 入口 ----------
 
+# ---------- 多工具：list/show/del/clean/stats ----------
+
+def _prov(args):
+    providers = _load_providers()
+    key = getattr(args, "tool", None) or "claude"
+    try:
+        p = providers.get_provider(key)
+    except KeyError:
+        raise UserError("未知的工具: %s（先用 tools 查看）" % key)
+    if not p.available():
+        raise UserError("%s 未安装（找不到 %s）" % (p.name, p.root))
+    return p
+
+
+def _prov_rows(args):
+    p = _prov(args)
+    rows = p.sessions()
+    project = getattr(args, "project", None)
+    if project:
+        q = project.lower()
+        rows = [s for s in rows
+                if q in (s.get("project") or "").lower()
+                or q in (s.get("cwd") or "").lower()]
+    if getattr(args, "here", False):
+        cwd = os.getcwd().replace("\\", "/").lower().rstrip("/")
+        rows = [s for s in rows
+                if (s.get("cwd") or "").replace("\\", "/").lower().startswith(cwd)]
+    return p, rows
+
+
+def _tok_total(b):
+    if not b:
+        return 0
+    return (b.get("input", 0) + b.get("cache_read", 0)
+            + b.get("cache_write", 0) + b.get("output", 0))
+
+
+def _print_prov_row(i, s):
+    tkt = _tok_total(s.get("tokens"))
+    tk = _tok(tkt) if tkt else "-"
+    print("  %s  %s  %s  %s  %s  %s" % (
+        rpad(str(i), 4), pad(fmt_mtime(s["mtime"]), 14),
+        rpad(human_size(s.get("size") or 0), 7), rpad(tk, 7),
+        pad(short_path(s.get("project") or "", 2), W_PROJ),
+        trunc(s.get("title") or "(无标题)", W_TITLE)))
+
+
+def _prov_table(rows, start=1):
+    head = (f"{'#':>4}  {pad('最后活动', 14)}  {rpad('大小', 7)}  "
+            f"{rpad('Token', 7)}  {pad('项目', W_PROJ)}  标题")
+    print(head)
+    print("-" * disp_w(head))
+    for i, s in enumerate(rows, start):
+        _print_prov_row(i, s)
+
+
+def _resolve_prov(rows, token):
+    token = (token or "").strip()
+    if token.startswith("#"):
+        try:
+            n = int(token[1:])
+        except ValueError:
+            raise UserError("编号格式不对: %s" % token)
+        if not 1 <= n <= len(rows):
+            raise UserError("编号超出范围")
+        return rows[n - 1]
+    tok = token.lower()
+    hit = [s for s in rows if (s.get("id") or "").lower().startswith(tok)]
+    if len(hit) == 1:
+        return hit[0]
+    if not hit:
+        raise UserError("未找到会话: %s" % token)
+    print("「%s」匹配到 %d 个，请写长一点：" % (token, len(hit)))
+    for i, s in enumerate(hit, 1):
+        _print_prov_row(i, s)
+    raise UserError("")
+
+
+def _prov_list(args):
+    p, rows = _prov_rows(args)
+    sort = getattr(args, "sort", "time")
+    if sort == "size":
+        rows.sort(key=lambda s: -(s.get("size") or 0))
+    elif sort == "tokens":
+        rows.sort(key=lambda s: -_tok_total(s.get("tokens")))
+    else:
+        rows.sort(key=lambda s: -(s.get("mtime") or 0))
+    limit = getattr(args, "limit", 30) or 0
+    total = len(rows)
+    if limit > 0:
+        rows = rows[:limit]
+    if not rows:
+        print("%s 没有会话记录。" % p.name)
+        return
+    _prov_table(rows)
+    if total > len(rows):
+        print("\n（共 %d 个，仅显示 %d 个；-n 0 查看全部）" % (total, len(rows)))
+
+
+def _prov_show(args):
+    p, rows = _prov_rows(args)
+    s = _resolve_prov(rows, args.id)
+    info = p.detail(s) or {}
+    print("会话ID:   %s" % s["id"])
+    print("工具:     %s（%s）" % (p.name, p.root))
+    print("标题:     %s" % (s.get("title") or "(无标题)"))
+    print("项目:     %s" % (s.get("cwd") or s.get("project") or "(未知)"))
+    print("文件:     %s" % s.get("path"))
+    print("大小:     %s" % human_size(s.get("size") or 0))
+    if s.get("tokens"):
+        b = s["tokens"]
+        print("Token:    %s（输入 %s · 输出 %s · 缓存读 %s）" % (
+            _tok(_tok_total(b)), _tok(b.get("input", 0)),
+            _tok(b.get("output", 0)), _tok(b.get("cache_read", 0))))
+    print("时间:     %s → %s" % (info.get("start_ts") or "-",
+                                  info.get("end_ts") or "-"))
+    if info.get("first_text"):
+        print("首条提问: %s" % trunc(info["first_text"], 100))
+    cmd = p.resume_cmd(s)
+    if cmd:
+        print("恢复:     %s" % cmd)
+
+
+def _prov_del(args):
+    p, rows = _prov_rows(args)
+    targets, seen = [], set()
+    for t in args.ids:
+        s = _resolve_prov(rows, t)
+        if s["id"] in seen:
+            continue
+        seen.add(s["id"])
+        targets.append(s)
+    if not targets:
+        return
+    for i, s in enumerate(targets, 1):
+        _print_prov_row(i, s)
+    if not args.y:
+        ans = ask("确认删除以上 %d 个? (y/N) " % len(targets)).lower()
+        if ans not in ("y", "yes"):
+            print("已取消")
+            return
+    res = p.delete([s["id"] for s in targets], purge=args.purge,
+                   force=getattr(args, "force", False))
+    for d in res.get("deleted", []):
+        print("%s: %s" % ("已永久删除" if args.purge else "已移入回收站",
+                          d.get("title") or d["id"][:12]))
+    for e in res.get("errors", []):
+        print("失败: %s" % e)
+    for s in res.get("skipped_live", []):
+        print("跳过当前正在运行的会话: %s" % s)
+    print("\n共处理 %d 个，释放 %s" % (len(res.get("deleted", [])),
+                                     res.get("freed_str") or "0B"))
+
+
+def _prov_clean(args):
+    p, rows = _prov_rows(args)
+    now = time.time()
+    cutoff = parse_duration(args.older_than) if args.older_than else None
+    minsize = parse_size(args.bigger_than) if args.bigger_than else None
+    keepn = args.keep_last or 0
+    protected = {p.live_id()}
+    if keepn:
+        byproj = {}
+        for s in rows:
+            byproj.setdefault(s.get("project") or "", []).append(s)
+        for lst in byproj.values():
+            lst.sort(key=lambda s: -(s.get("mtime") or 0))
+            for s in lst[:keepn]:
+                protected.add(s["id"])
+    cands = []
+    for s in rows:
+        if s["id"] in protected:
+            continue
+        if cutoff is not None and now - (s.get("mtime") or 0) < cutoff:
+            continue
+        if minsize is not None and (s.get("size") or 0) < minsize:
+            continue
+        cands.append(s)
+    if not cands:
+        print("没有满足条件的会话。")
+        return
+    total = human_size(sum(s.get("size") or 0 for s in cands))
+    print("%s将清理 %d 个会话（共 %s）：" % (
+        "[预览] " if args.dry_run else "", len(cands), total))
+    for i, s in enumerate(cands, 1):
+        _print_prov_row(i, s)
+    if args.dry_run:
+        return
+    if not args.y and ask("确认? (y/N) ").lower() not in ("y", "yes"):
+        print("已取消")
+        return
+    res = p.delete([s["id"] for s in cands], purge=args.purge)
+    print("\n共处理 %d 个，释放 %s" % (len(res.get("deleted", [])),
+                                     res.get("freed_str") or "0B"))
+    for e in res.get("errors", []):
+        print("失败: %s" % e)
+
+
+def _prov_stats(args):
+    p, rows = _prov_rows(args)
+    total = sum(s.get("size") or 0 for s in rows)
+    print("%s：共 %d 个会话，%s\n" % (p.name, len(rows), human_size(total)))
+    byproj = {}
+    for s in rows:
+        byproj.setdefault(s.get("project") or "(未知项目)", []).append(s)
+    for name, lst in sorted(byproj.items(),
+                            key=lambda kv: -sum(x.get("size") or 0 for x in kv[1])):
+        sz = human_size(sum(x.get("size") or 0 for x in lst))
+        tok = sum(_tok_total(x.get("tokens")) for x in lst)
+        latest = max((x.get("mtime") or 0) for x in lst)
+        print("  %s %s 个  %s tokens  最近 %s  %s" % (
+            rpad(sz, 8), rpad(str(len(lst)), 4), rpad(_tok(tok), 8),
+            fmt_mtime(latest) if latest else "-", trunc(short_path(name, 3), 46)))
+
+
 def cmd_web(args):
     # 作为包运行时走相对导入；直接跑脚本时退回同级模块
     try:
@@ -803,6 +1028,133 @@ def cmd_web(args):
     except ImportError:
         import server
     sys.exit(server.serve(args.root, args.port, not args.no_browser))
+
+
+# ---------- 多工具：tools / usage ----------
+
+def _tok(n):
+    n = float(n or 0)
+    for unit in ("", "K", "M", "G", "T"):
+        if n < 1024 or unit == "T":
+            return ("%.0f%s" % (n, unit)) if unit == "" else ("%.1f%s" % (n, unit))
+        n /= 1024
+    return "%.1fT" % n
+
+
+def _load_providers():
+    try:
+        from . import providers
+    except ImportError:
+        import providers
+    return providers
+
+
+def cmd_tools(args):
+    from . import usage as usage_mod
+    providers = _load_providers()
+    if getattr(args, "scan", False):
+        providers.all_providers(force=True)
+    cache = usage_mod.load_cache()
+    rows = []
+    for key in providers.keys():
+        p = providers.get_provider(key)
+        installed = p.available()
+        n = size = 0
+        if installed:
+            try:
+                n, size = p.quick_stats()
+            except Exception:  # noqa: BLE001
+                pass
+        qu = p.quick_usage(cache) if installed else {"total": 0}
+        rows.append((p, installed, n, size, qu.get("total") or 0))
+    head = "  %s  %s  %s  %s  %s" % (
+        pad("工具", 16), rpad("会话", 6), rpad("占用", 9),
+        rpad("Token", 9), "数据目录")
+    print(head)
+    print("-" * disp_w(head))
+    for p, installed, n, size, tok in rows:
+        status = p.root if installed else "未安装"
+        name = p.name + ("（只读）" if installed and getattr(p, "readonly", False)
+                         else "")
+        print("  %s  %s  %s  %s  %s" % (
+            pad(name, 16), rpad(str(n) if installed else "-", 6),
+            rpad(human_size(size) if installed else "-", 9),
+            rpad(_tok(tok) if tok else "-", 9), trunc(status, 60)))
+    print("\n提示: 工作台看每日用量 → session-manager usage")
+
+
+def _period_key(day, period):
+    import datetime
+    try:
+        d = datetime.date(*[int(x) for x in day.split("-")])
+    except ValueError:
+        return day
+    if period == "week":
+        monday = d - datetime.timedelta(days=d.weekday())
+        return monday.isoformat()
+    if period == "month":
+        return d.strftime("%Y-%m")
+    if period == "year":
+        return d.strftime("%Y")
+    return day
+
+
+def cmd_usage(args):
+    from . import usage as usage_mod
+    providers = _load_providers()
+    provs = [providers.get_provider(k) for k in providers.keys()]
+    provs = [p for p in provs if p.available()]
+    data = usage_mod.collect(provs, force=args.refresh)
+    tools = data["tools"]
+    print("Token 用量（%s 生成）\n" % time.strftime("%Y-%m-%d %H:%M",
+                                                   time.localtime(data["generated"])))
+    head = "  %s  %s  %s  %s  %s  %s" % (
+        pad("工具", 16), rpad("输入", 9), rpad("输出", 9),
+        rpad("缓存读", 9), rpad("合计", 9), "会话")
+    print(head)
+    print("-" * disp_w(head))
+    for t in tools:
+        if not t["installed"]:
+            print("  %s  %s" % (pad(t["name"], 12), "未安装"))
+            continue
+        b = t["totals"]
+        print("  %s  %s  %s  %s  %s  %s%s" % (
+            pad(t["name"], 12), rpad(_tok(b["input"]), 9),
+            rpad(_tok(b["output"]), 9), rpad(_tok(b["cache_read"]), 9),
+            rpad(_tok(t["total"]), 9), rpad(str(t["sessions"]), 4),
+            "  估算" if t["approximate"] else ""))
+    b = data["totals"]
+    print("\n总计: 输入 %s · 输出 %s · 缓存读 %s · 合计 %s" % (
+        _tok(b["input"]), _tok(b["output"]), _tok(b["cache_read"]),
+        _tok(sum(x["total"] for x in tools))))
+
+    period = args.period or "day"
+    limit = args.limit or (14 if period == "day" else 12)
+    agg = {}
+    for day, per_tool in data["days"].items():
+        key = _period_key(day, period)
+        slot = agg.setdefault(key, {})
+        for tk, tb in per_tool.items():
+            cur = slot.setdefault(tk, {"input": 0, "output": 0, "cache_read": 0,
+                                       "cache_write": 0, "reasoning": 0, "requests": 0})
+            for f in cur:
+                cur[f] += tb.get(f, 0)
+    keys = sorted(agg)[-limit:]
+    if keys:
+        print("\n按%s（最近 %d 个）：" % (
+            {"day": "天", "week": "周", "month": "月", "year": "年"}[period], len(keys)))
+        mx = max(sum(v.get("input", 0) + v.get("output", 0)
+                    + v.get("cache_read", 0) + v.get("cache_write", 0)
+                    for v in agg[k].values()) for k in keys) or 1
+        for k in keys:
+            tot = sum(v.get("input", 0) + v.get("output", 0)
+                      + v.get("cache_read", 0) + v.get("cache_write", 0)
+                      for v in agg[k].values())
+            bar = "█" * max(1, int(tot / mx * 24)) if tot else ""
+            print("  %s  %s  %s" % (pad(k, 10), rpad(_tok(tot), 9), bar))
+    approx = [t["name"] for t in tools if t.get("approximate")]
+    if approx:
+        print("\n注意: %s 的 token 是按会话最后活动时间估算的。" % "、".join(approx))
 
 
 def projects_root(args) -> str:
@@ -830,9 +1182,10 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("list", aliases=["ls"], help="列出会话")
+    p.add_argument("--tool", default="claude", help="工具 key（见 tools 命令）")
     p.add_argument("-p", "--project", help="按项目路径/目录名过滤（支持 * 通配）")
     p.add_argument("-c", "--here", action="store_true", help="只看当前目录对应项目")
-    p.add_argument("-s", "--sort", choices=["time", "size", "lines"],
+    p.add_argument("-s", "--sort", choices=["time", "size", "lines", "tokens"],
                    default="time", help="排序（默认按最后活动时间）")
     p.add_argument("-n", "--limit", type=int, default=30,
                    help="最多显示多少条（0=全部，默认 30）")
@@ -840,11 +1193,13 @@ def build_parser():
 
     p = sub.add_parser("show", help="查看单个会话详情")
     p.add_argument("id", help="会话 ID 前缀或 #编号")
+    p.add_argument("--tool", default="claude", help="工具 key（见 tools 命令）")
     p.set_defaults(func=cmd_show)
 
     p = sub.add_parser("del", aliases=["delete", "rm"],
                        help="删除会话（默认移入回收站）")
     p.add_argument("ids", nargs="+", help="会话 ID 前缀或 #编号，可多个")
+    p.add_argument("--tool", default="claude", help="工具 key（见 tools 命令）")
     p.add_argument("-y", action="store_true", help="跳过确认")
     p.add_argument("--purge", action="store_true", help="永久删除（不进回收站）")
     p.add_argument("--force", action="store_true",
@@ -857,6 +1212,7 @@ def build_parser():
     p.add_argument("--keep-last", type=int, default=0,
                    help="每个项目保留最近 N 个")
     p.add_argument("-p", "--project", help="按项目路径/目录名过滤")
+    p.add_argument("--tool", default="claude", help="工具 key（见 tools 命令）")
     p.add_argument("-c", "--here", action="store_true", help="只清当前目录对应项目")
     p.add_argument("-y", action="store_true", help="跳过确认")
     p.add_argument("--purge", action="store_true", help="永久删除（不进回收站）")
@@ -876,12 +1232,25 @@ def build_parser():
 
     p = sub.add_parser("stats", aliases=["du"], help="各项目占用统计")
     p.add_argument("-p", "--project", help="按项目路径/目录名过滤")
+    p.add_argument("--tool", default="claude", help="工具 key（见 tools 命令）")
     p.set_defaults(func=cmd_stats)
 
     p = sub.add_parser("web", help="启动本地网页界面（勾选删除、回收站恢复）")
     p.add_argument("--port", type=int, default=8765, help="端口，默认 8765")
     p.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     p.set_defaults(func=cmd_web)
+
+    p = sub.add_parser("tools", help="扫描并查看本机的 AI 客户端")
+    p.add_argument("--scan", action="store_true", help="强制重新扫描（不用 30 秒缓存）")
+    p.set_defaults(func=cmd_tools)
+
+    p = sub.add_parser("usage", aliases=["token"],
+                       help="Token 用量统计（按天/周/月/年）")
+    p.add_argument("--period", choices=["day", "week", "month", "year"],
+                   default="day", help="时间粒度（默认按天）")
+    p.add_argument("-n", "--limit", type=int, default=0, help="显示几个时间段")
+    p.add_argument("--refresh", action="store_true", help="忽略缓存重新扫描")
+    p.set_defaults(func=cmd_usage)
 
     return ap
 
