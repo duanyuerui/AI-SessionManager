@@ -11,17 +11,21 @@ Windows 默认位置：
     usage_events        每次模型请求（started_at_ms / model / token）
     usage_event_items   同上，按模型拆开的明细
 
-只读接入：这是对方应用自己的库，没有官方的「已删除」标记，直接删行会留下
-孤立记录，所以只浏览、不修改。
+删除：对方应用没有「已删除」标记，删一个会话要同时清掉十几张表里的关联行。
+所以删除前先把这些行导出成 JSON 放进回收站（`~/.ai-session-manager/trash/opensquilla/`），
+再在一个事务里删干净；恢复就是把 JSON 里的行按顺序插回去。删除前提是 OpenSquilla 已退出。
 """
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sqlite3
+import subprocess
 import time
 
-from .base import (Provider, add_bucket, bucket_total, day_key, human_size,
-                   new_bucket, to_epoch)
+from .base import (Provider, add_bucket, app_trash_root, bucket_total, day_key,
+                   human_size, new_bucket, to_epoch)
 
 _QUICK = {}  # db 路径 -> (时间, (会话数, 占用))
 _DB_NAMES = ("sessions.db", "session.db", "sessions.sqlite",
@@ -92,14 +96,92 @@ def _bucket(inp, cache_read, cache_write, out, reasoning, requests=1):
     return b
 
 
+# ---------- 删除 / 恢复用的小工具 ----------
+
+_REL_COLS = ("session_id", "session_key")
+_SKIP_TABLES = ("transcript_fts", "search_index", "sqlite_")
+_RESTORE_FIRST = ("sessions", "usage_events", "usage_event_items")
+
+
+def _jsonable(v):
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return {"__b64__": base64.b64encode(bytes(v)).decode("ascii")}
+    return v
+
+
+def _from_json(v):
+    if isinstance(v, dict) and list(v.keys()) == ["__b64__"]:
+        try:
+            return base64.b64decode(v["__b64__"])
+        except Exception:  # noqa: BLE001
+            return None
+    return v
+
+
+def _rel_tables(con):
+    """[(表名, [session_id / session_key 里存在的列])]，跳过 FTS / 系统表。"""
+    out = []
+    for (name,) in con.execute("select name from sqlite_master where type='table'"):
+        low = name.lower()
+        if any(low.startswith(p) for p in _SKIP_TABLES):
+            continue
+        try:
+            cols = {r[1].lower() for r in con.execute('pragma table_info("%s")' % name)}
+        except sqlite3.Error:
+            continue
+        hit = [c for c in _REL_COLS if c in cols]
+        if hit:
+            out.append((name, hit))
+    return out
+
+
+def _related_sessions(con, session_key):
+    """这个会话 + 由它派生出的子会话（parent_session_key / spawned_by）。"""
+    try:
+        rows = [dict(r) for r in con.execute(
+            "select session_key, session_id, parent_session_key, spawned_by "
+            "from sessions")]
+    except sqlite3.Error:
+        return []
+    by_key = {r["session_key"]: r for r in rows if r.get("session_key")}
+    if session_key not in by_key:
+        return []
+    keep = {session_key}
+    changed = True
+    while changed:
+        changed = False
+        for r in rows:
+            k = r.get("session_key")
+            if not k or k in keep:
+                continue
+            if (r.get("parent_session_key") in keep
+                    or r.get("spawned_by") in keep):
+                keep.add(k)
+                changed = True
+    return [by_key[k] for k in keep if k in by_key]
+
+
+def _app_running():
+    """OpenSquilla 开着的时候不要动它的库。"""
+    if os.name != "nt":
+        return False
+    try:
+        out = subprocess.run(
+            ["tasklist", "/FI", "IMAGENAME eq OpenSquilla.exe", "/NH"],
+            capture_output=True, text=True, timeout=5)
+        return "OpenSquilla.exe" in (out.stdout or "")
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class OpenSquillaProvider(Provider):
     key = "opensquilla"
     name = "OpenSquilla"
     color = "#8a8f98"
     hint = "%APPDATA%/@opensquilla/desktop-electron/opensquilla/state/sessions.db"
     kind = "soft"
-    readonly = True
-    note = "只读"
+    readonly = False
+    note = ""
 
     @property
     def db_file(self):
@@ -250,6 +332,7 @@ class OpenSquillaProvider(Provider):
                 models = [r["model"]]
             out.append({
                 "tool": self.key, "id": sid,
+                "session_key": r["session_key"],
                 "title": title,
                 "project": r["execution_workspace"] or "",
                 "cwd": r["execution_workspace"] or "",
@@ -327,21 +410,247 @@ class OpenSquillaProvider(Provider):
             "models": models,
         }
 
-    # ---------- 删除（只读） ----------
+    # ---------- 删除 / 回收站 ----------
+    @property
+    def trash_root(self):
+        return app_trash_root(self.key)
+
+    def _select_related(self, con, sessions, table, cols):
+        keys = [r["session_key"] for r in sessions]
+        ids = [r["session_id"] for r in sessions]
+        where, params = [], []
+        if "session_id" in cols and ids:
+            where.append("session_id in (%s)" % ",".join("?" * len(ids)))
+            params += ids
+        if "session_key" in cols and keys:
+            where.append("session_key in (%s)" % ",".join("?" * len(keys)))
+            params += keys
+        if not where:
+            return []
+        return [dict(r) for r in con.execute(
+            'select * from "%s" where %s' % (table, " or ".join(where)),
+            params)]
+
+    def _export(self, con, sessions):
+        """把这个会话（含子会话）在每张表里的行都导出来，恢复时原样插回去。"""
+        data = {}
+        for table, cols in _rel_tables(con):
+            rows = self._select_related(con, sessions, table, cols)
+            if rows:
+                data[table] = [{k: _jsonable(v) for k, v in r.items()}
+                               for r in rows]
+        # usage_event_items 没有 session 列，靠 event_id 挂在 usage_events 下面
+        eids = [r.get("event_id") for r in (data.get("usage_events") or [])
+                if r.get("event_id")]
+        if eids:
+            try:
+                rows = [dict(r) for r in con.execute(
+                    "select * from usage_event_items where event_id in (%s)"
+                    % ",".join("?" * len(eids)), eids)]
+            except sqlite3.Error:
+                rows = []
+            if rows:
+                data["usage_event_items"] = [
+                    {k: _jsonable(v) for k, v in r.items()} for r in rows]
+        return data
+
+    def _purge_rows(self, con, sessions):
+        keys = [r["session_key"] for r in sessions]
+        ids = [r["session_id"] for r in sessions]
+        # usage_event_items 靠 event_id 关联；先删掉，别指望外键级联总是开着
+        try:
+            eids = [r[0] for r in con.execute(
+                "select event_id from usage_events where session_id in (%s)"
+                % ",".join("?" * len(ids)), ids)]
+            if eids:
+                con.execute("delete from usage_event_items where event_id in (%s)"
+                            % ",".join("?" * len(eids)), eids)
+        except sqlite3.Error:
+            pass
+        for table, cols in _rel_tables(con):
+            if table == "sessions":
+                continue
+            where, params = [], []
+            if "session_id" in cols:
+                where.append("session_id in (%s)" % ",".join("?" * len(ids)))
+                params += ids
+            if "session_key" in cols:
+                where.append("session_key in (%s)" % ",".join("?" * len(keys)))
+                params += keys
+            if where:
+                con.execute('delete from "%s" where %s'
+                            % (table, " or ".join(where)), params)
+        con.execute("delete from sessions where session_key in (%s)"
+                    % ",".join("?" * len(keys)), keys)
+
+    def _write_trash(self, session, data):
+        os.makedirs(self.trash_root, exist_ok=True)
+        sid = session.get("id") or session.get("session_id") or ""
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        token = "%s_%s.json" % (stamp, sid)
+        i = 1
+        while os.path.exists(os.path.join(self.trash_root, token)):
+            i += 1
+            token = "%s_%d_%s.json" % (stamp, i, sid)
+        path = os.path.join(self.trash_root, token)
+        payload = {
+            "tool": self.key,
+            "session_id": sid,
+            "session_key": session.get("session_key") or "",
+            "title": session.get("title") or "",
+            "deleted_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "db": self.db_file,
+            "tables": data,
+        }
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False)
+        return token
+
     def delete(self, ids, purge=False, force=False):
-        return {"deleted": [], "skipped_live": [],
-                "errors": ["「%s」是数据库型客户端，为避免破坏它的数据，"
-                           "目前只读展示" % self.name],
-                "freed": 0, "freed_str": "0B", "purge": purge}
+        out = {"deleted": [], "skipped_live": [], "errors": [], "freed": 0,
+               "purge": purge}
+        if _app_running():
+            out["errors"].append("OpenSquilla 正在运行，请先退出它再删除")
+            out["freed_str"] = "0B"
+            return out
+        rows = {s["id"]: s for s in self._rows()}
+        try:
+            con = _connect(self.db_file, readonly=False)
+        except (OSError, sqlite3.Error) as e:
+            out["errors"].append("打不开数据库：%s" % e)
+            out["freed_str"] = "0B"
+            return out
+        try:
+            con.execute("PRAGMA foreign_keys=ON")
+            for sid in ids:
+                s = rows.get(str(sid))
+                if not s:
+                    out["errors"].append("未找到会话 %s" % str(sid)[:8])
+                    continue
+                try:
+                    con.execute("BEGIN IMMEDIATE")
+                except sqlite3.Error as e:
+                    out["errors"].append(
+                        "数据库被占用（%s），请先退出 OpenSquilla" % e)
+                    break
+                try:
+                    sessions = _related_sessions(con, s.get("session_key") or "")
+                    if not sessions:
+                        raise sqlite3.Error("找不到会话记录")
+                    data = self._export(con, sessions)
+                    if not purge:
+                        self._write_trash(s, data)
+                    self._purge_rows(con, sessions)
+                    con.commit()
+                except Exception as e:  # noqa: BLE001
+                    con.rollback()
+                    out["errors"].append(
+                        "%s: %s" % (s.get("title") or str(sid)[:8], e))
+                    continue
+                out["deleted"].append({"id": sid,
+                                       "title": s.get("title") or "(无标题)"})
+                out["freed"] += s.get("size") or 0
+        finally:
+            con.close()
+        out["freed_str"] = human_size(out["freed"])
+        return out
 
     def trash_list(self):
-        return []
+        out = []
+        root = self.trash_root
+        if not os.path.isdir(root):
+            return out
+        for fn in sorted(os.listdir(root), reverse=True):
+            if not fn.endswith(".json"):
+                continue
+            p = os.path.join(root, fn)
+            try:
+                with open(p, encoding="utf-8") as f:
+                    meta = json.load(f)
+                size = os.path.getsize(p)
+            except (OSError, ValueError):
+                continue
+            out.append({
+                "token": fn, "id": meta.get("session_id") or "",
+                "title": meta.get("title") or "",
+                "deleted_at": meta.get("deleted_at") or "",
+                "original_path": meta.get("db") or "",
+                "size": size, "size_str": human_size(size),
+            })
+        return out
 
     def trash_restore(self, tokens):
-        return {"restored": [], "errors": ["只读展示，不支持恢复"]}
+        out = {"restored": [], "errors": []}
+        for t in tokens:
+            if not t or t != os.path.basename(t) or not t.endswith(".json"):
+                out["errors"].append("非法条目")
+                continue
+            path = os.path.join(self.trash_root, t)
+            try:
+                with open(path, encoding="utf-8") as f:
+                    meta = json.load(f)
+            except (OSError, ValueError):
+                out["errors"].append("备份文件损坏：%s" % t)
+                continue
+            tables = meta.get("tables") or {}
+            try:
+                con = _connect(self.db_file, readonly=False)
+            except (OSError, sqlite3.Error) as e:
+                out["errors"].append("打不开数据库：%s" % e)
+                continue
+            ok = False
+            try:
+                con.execute("PRAGMA foreign_keys=ON")
+                con.execute("BEGIN IMMEDIATE")
+                order = [x for x in _RESTORE_FIRST if x in tables]
+                order += [x for x in sorted(tables) if x not in order]
+                for table in order:
+                    for row in tables[table]:
+                        cols = list(row.keys())
+                        vals = [_from_json(row[c]) for c in cols]
+                        con.execute(
+                            'insert into "%s" (%s) values (%s)'
+                            % (table,
+                               ",".join('"%s"' % c for c in cols),
+                               ",".join("?" * len(cols))), vals)
+                con.commit()
+                ok = True
+            except Exception as e:  # noqa: BLE001
+                try:
+                    con.rollback()
+                except sqlite3.Error:
+                    pass
+                out["errors"].append("%s: %s" % (meta.get("title") or t, e))
+            finally:
+                con.close()
+            if not ok:
+                continue
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            out["restored"].append(meta.get("session_id") or t)
+        return out
 
     def trash_empty(self):
-        return {"removed": 0, "freed": 0, "freed_str": "0B", "errors": []}
+        out = {"removed": 0, "freed": 0, "errors": []}
+        root = self.trash_root
+        if not os.path.isdir(root):
+            out["freed_str"] = "0B"
+            return out
+        for fn in sorted(os.listdir(root)):
+            if not fn.endswith(".json"):
+                continue
+            p = os.path.join(root, fn)
+            try:
+                size = os.path.getsize(p)
+                os.remove(p)
+                out["removed"] += 1
+                out["freed"] += size
+            except OSError as e:
+                out["errors"].append("%s: %s" % (fn, e))
+        out["freed_str"] = human_size(out["freed"])
+        return out
 
     def usage_entries(self, cache):
         self.last_paths = None

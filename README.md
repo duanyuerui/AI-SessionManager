@@ -43,7 +43,8 @@ Goose、Amp、Crush……），格式还没吃透的先以「只读发现」展�
 - **SQLite 型**：`sessions` + `turns` 表（GitHub Copilot Chat 等），只读展示
 
 发现的客户端在左侧「已发现」分组里；能确定删除方式的可以正常删除，数据库结构不确定的
-标为「只读」，只浏览不改动。
+标为「只读」，只浏览不改动。OpenSquilla 做了完整适配：删一个会话会把它在十几张表里的
+关联行先备份成 JSON，再在一个事务里删干净，回收站可以原样恢复（删除前要先退出 OpenSquilla）。
 
 ## 各工具的数据从哪来
 
@@ -55,7 +56,7 @@ Goose、Amp、Crush……），格式还没吃透的先以「只读发现」展�
 | WorkBuddy | 索引 `~/.workbuddy/workbuddy.db`，正文 `~/.workbuddy/projects/<项目>/<id>.jsonl` | JSONL | 写 `sessions.deleted_at`（应用自己的软删除） |
 | ZCode | `~/.zcode/cli/db/db.sqlite`（session / message / part / model_usage） | SQLite | 写 `session.time_deleted`（应用自己的软删除） |
 | AtomCode | `~/.atomcode/sessions/<项目>/<id>.meta` + `.snapshot` | JSON | 整组文件移入 `~/.ai-session-manager/trash/atomcode/` |
-| OpenSquilla | `%APPDATA%\@opensquilla\desktop-electron\opensquilla\state\sessions.db`（session / transcript_entries / usage_events） | SQLite | 只读浏览（对方库没有删除标记，不直接改） |
+| OpenSquilla | `%APPDATA%\@opensquilla\desktop-electron\opensquilla\state\sessions.db`（session / transcript_entries / usage_events） | SQLite | 先把关联行导出成 JSON 放进 `~/.ai-session-manager/trash/opensquilla/`，再删库里的行；删除前需退出 OpenSquilla |
 | 其它发现的客户端 | 见 `providers/catalog.py` / 扫描结果 | JSONL / JSON / tasks / SQLite | 文件型移入 `~/.ai-session-manager/trash/<key>/`；数据库型只读 |
 
 自动发现的客户端回收站统一放在 `~/.ai-session-manager/trash/<key>/`，不往对方的数据目录里塞文件。
@@ -165,6 +166,7 @@ Linux：`~/.cache/ai-session-manager/`），只重扫有变化的文件，可用
 AI-SessionManager/
 ├── run.py                      # 开发入口（exe 也从这里启动）
 ├── ClaudeSessionManager.spec   # PyInstaller 打包配置
+├── ico.svg / ico.ico           # 应用图标（svg 源文件 / exe 用的多尺寸 ico）
 ├── pyproject.toml              # src 布局 + 命令入口
 ├── requirements-dev.txt        # 仅打包需要的 pyinstaller
 ├── src/session_manager/
@@ -184,7 +186,7 @@ AI-SessionManager/
 │       ├── index.html          # 单页界面（左侧菜单 + 工作台）
 │       ├── tailwind.css        # 源码样式：设计变量 + 组件层（编译输入）
 │       ├── tailwind.config.js  # Tailwind 配置
-│       └── vendor/             # 编译好的 tailwind.css + Tom Select
+│       └── vendor/             # 编译好的 tailwind.css + Tom Select + icon.svg
 └── dist/
     ├── AISessionManager.exe      # 客户端版（无控制台，独立窗口）
     └── ClaudeSessionManager.exe  # 控制台版（黑色窗口 + 默认浏览器）
@@ -243,5 +245,13 @@ python -m PyInstaller --noconfirm --clean ClaudeSessionManager.spec
 
 spec 里已经把 `src/session_manager/webui` 作为数据目录打进去，并把新增的 provider 模块
 写进 `hiddenimports`；两个 exe 共用同一份代码，只是 `console=` 不同。
+图标来自根目录的 `ico.svg`，exe 用的是 `ico.ico`（16–256 多尺寸），网页和客户端窗口的
+favicon 用 `src/session_manager/webui/vendor/icon.svg`。换了图标后需要重新生成 ico：
+
+```bash
+# 用浏览器把 svg 渲染成 512×512 透明 PNG 后
+python -c "from PIL import Image; Image.open('icon512.png').convert('RGBA').save('ico.ico', format='ICO', sizes=[(16,16),(24,24),(32,32),(48,48),(64,64),(128,128),(256,256)])"
+```
+
 改完代码或界面重新执行上面这条命令即可。打包时如果旧 exe 正在运行，
 Windows 会锁住文件，先关掉再打包。

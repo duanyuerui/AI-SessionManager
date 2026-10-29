@@ -16,15 +16,16 @@ description: 扫描本机所有留下会话数据的 AI 编程客户端（固定
 | DSH | `~/.dsh/sessions/…/session.v4.jsonl.zstd` | 会话目录移入 `~/.dsh/session-trash/` |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` + `projects/*.jsonl` | 软删除 `sessions.deleted_at` |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 软删除 `session.time_deleted` |
-| OpenSquilla | `%APPDATA%\@opensquilla\desktop-electron\opensquilla\state\sessions.db` | 只读浏览 |
+| OpenSquilla | `%APPDATA%\@opensquilla\desktop-electron\opensquilla\state\sessions.db` | 关联行备份成 JSON 后删行（需先退出 OpenSquilla） |
 
 自动发现：启动时扫描家目录 / AppData / Application Support / .config / .local/share
 和 VS Code 系编辑器的 globalStorage，用通用适配器接入 AtomCode、Gemini CLI、Qwen Code、
 Cline / Roo / Kilo、GitHub Copilot Chat、Continue、OpenCode、Goose、Amp、Crush 等。
 另外会按「会话库签名」直接找 `sessions.db` / `chat.db` / `session-store.db` 这类 SQLite
 （浅 5 层、3 秒预算），名字完全陌生的客户端也能发现；OpenSquilla 就是这样接进来的。
-文件型可删除；SQLite 结构不确定的标为「只读」。自动发现的回收站在
-`~/.ai-session-manager/trash/<key>/`。
+文件型可删除；SQLite 结构不确定的标为「只读」；OpenSquilla 例外——它的库结构已经摸清，
+删除时先把关联行备份成 JSON 再删，回收站可恢复（删除前要先退出 OpenSquilla）。
+自动发现的回收站在 `~/.ai-session-manager/trash/<key>/`。
 
 源码位置：`C:\Users\duany\Desktop\AI-SessionManager`（以下用 `$APP` 代指）
 
