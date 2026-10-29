@@ -3,9 +3,9 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "claude-session-manager"
-version = "1.1.0"
-description = "管理 Claude Code 会话历史（~/.claude/projects）：列出、查看、删除、批量清理、回收站恢复、占用统计，带本地网页界面"
+name = "ai-session-manager"
+version = "2.0.0"
+description = "一站式 AI 会话管理与 Token 用量工作台：Claude Code / Codex / DSH / WorkBuddy / ZCode"
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
@@ -13,6 +13,7 @@ dependencies = []
 
 [project.scripts]
 claude-session-manager = "session_manager.server:main"
+ai-session-manager = "session_manager.server:main"
 session-manager = "session_manager.core:main"
 
 [tool.setuptools]

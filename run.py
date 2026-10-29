@@ -4,9 +4,12 @@
     python run.py                 # 默认 http://127.0.0.1:8765
     python run.py --port 8899     # 换端口（被占用会自动往后找）
     python run.py --no-browser    # 只起服务
+    python run.py --app           # 用独立客户端窗口打开（没有地址栏）
 
 等价的命令行入口：
+    python -m session_manager tools | usage
     python -m session_manager list | show <id> | del <id> | clean | trash | stats
+    以上命令都可加 --tool claude|codex|dsh|workbuddy|zcode
 """
 import os
 import sys
@@ -26,7 +29,13 @@ def main(argv=None):
                 port = int(argv[i + 1])
             except ValueError:
                 print("--port 需要数字，已改用默认端口 %d" % port)
-    return server.serve(None, port, "--no-browser" not in argv)
+    no_browser = "--no-browser" in argv
+    app = "--app" in argv
+    # 无控制台的客户端 exe 里 sys.stdout 是 None：默认直接用客户端窗口
+    if (not app and not no_browser and getattr(sys, "frozen", False)
+            and sys.stdout is None):
+        app = True
+    return server.serve(None, port, not no_browser, app_window=app)
 
 
 if __name__ == "__main__":
