@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ai-session-manager"
-version = "2.0.4"
+version = "2.1.0"
 description = "一站式 AI 会话管理与 Token 用量工作台：Claude Code / Codex / DSH / WorkBuddy / ZCode"
 readme = "README.md"
 requires-python = ">=3.8"

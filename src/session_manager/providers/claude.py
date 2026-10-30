@@ -22,8 +22,20 @@ def _ns(root):
     )
 
 
+# 单次请求的合理耗时区间：太短多半是重复记录，太长多半是挂着没动
+_MIN_REQ_SEC = 0.02
+_MAX_REQ_SEC = 600.0
+
+
 def parse_usage(path):
-    """一次遍历：token（按 message.id 去重）+ 首尾提问 + 消息数。"""
+    """一次遍历：token（按 message.id 去重）+ 首尾提问 + 消息数。
+
+    顺带记两件工作台要用的东西：
+    - 失败请求：Claude Code 会写一条 model 为 <synthetic> 的 assistant 记录，
+      正文以 "API Error:" 开头，token 全是 0；
+    - 请求耗时：api-request 记录是发请求的时刻，assistant 记录的 timestamp
+      是这段回复落盘的时刻，两者相减就是这次请求的往返耗时。
+    """
     totals = new_bucket()
     days = {}
     models = {}
@@ -31,6 +43,9 @@ def parse_usage(path):
     hours = {}
     mhours = {}
     seen = {}
+    req_start = {}   # api-request id -> 发出时刻
+    reqs = {}        # requestRef -> {end, outs: {message.id: output_tokens}}
+    errors = []
     users = asst = 0
     first_text = last_text = ""
     first_ts = last_ts = None
@@ -55,8 +70,25 @@ def parse_usage(path):
                 asst += 1
                 m = d.get("message")
                 if isinstance(m, dict) and isinstance(m.get("usage"), dict):
+                    if d.get("isApiErrorMessage") or m.get("model") == "<synthetic>":
+                        errors.append(ts)
+                        continue
                     mid = m.get("id") or ("#%d" % idx)
+                    out = int(m["usage"].get("output_tokens") or 0)
                     seen[mid] = (m["usage"], m.get("model") or "unknown", ts)
+                    ref = d.get("requestRef")
+                    if ref:
+                        r = reqs.setdefault(
+                            ref, {"end": None, "outs": {}})
+                        if ts is not None and (r["end"] is None or ts > r["end"]):
+                            r["end"] = ts
+                        if out > r["outs"].get(mid, 0):
+                            r["outs"][mid] = out
+            elif t == "api-request":
+                rid = d.get("id")
+                if rid and ts is not None:
+                    if rid not in req_start or ts < req_start[rid]:
+                        req_start[rid] = ts
             elif t == "user":
                 txt = sm.real_user_text(sm.msg_text(d))
                 if txt:
@@ -75,6 +107,26 @@ def parse_usage(path):
         b["requests"] = 1
         add_bucket(totals, b)
         add_usage_buckets(days, models, mdays, ts, model, b, hours, mhours)
+    # 失败请求：只进总量和按日/按小时，不进模型榜
+    for ts in errors:
+        b = new_bucket()
+        b["errors"] = 1
+        add_bucket(totals, b)
+        add_usage_buckets(days, {}, {}, ts, "error", b, hours, None)
+    # 生成速度：只统计「有 api-request 起点、有 assistant 终点」的请求
+    for ref, r in reqs.items():
+        start, end = req_start.get(ref), r["end"]
+        if start is None or end is None:
+            continue
+        dur = end - start
+        out = sum(r["outs"].values())
+        if not (_MIN_REQ_SEC < dur < _MAX_REQ_SEC) or out <= 0:
+            continue
+        b = new_bucket()
+        b["gen_ms"] = int(dur * 1000)
+        b["gen_tokens"] = out
+        add_bucket(totals, b)
+        add_usage_buckets(days, {}, {}, end, "speed", b, hours, None)
     sid = os.path.splitext(os.path.basename(path))[0]
     return {
         "sid": sid, "totals": totals, "days": days, "models": models,
@@ -93,6 +145,8 @@ class ClaudeProvider(Provider):
     name = "Claude Code"
     color = "#eb6834"
     hint = "~/.claude/projects"
+    tracks_errors = True
+    tracks_timing = True
 
     @property
     def projects_root(self):

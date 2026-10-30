@@ -13,5 +13,5 @@ Token 用量工作台（按天 / 周 / 月 / 年）。
     webui      前端页面与第三方静态资源
 """
 
-__version__ = "2.0.4"
+__version__ = "2.1.0"
 __all__ = ["core", "server", "providers", "usage", "zstd"]

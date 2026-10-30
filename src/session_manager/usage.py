@@ -21,13 +21,16 @@ import threading
 import time
 
 try:
+    from . import pricing
     from .providers.base import (BUCKET_KEYS, add_bucket, bucket_total,
                                  new_bucket)
 except ImportError:  # 直接跑脚本
+    import pricing  # type: ignore
     from providers.base import (BUCKET_KEYS, add_bucket, bucket_total,  # type: ignore
                                 new_bucket)
 
-CACHE_VERSION = 4
+# 5 → 6：bucket 增加 input_off 等峰谷拆分键，旧缓存没有这些键
+CACHE_VERSION = 6
 _CACHE_NAME = "usage-cache.json"
 _LOCK = threading.Lock()
 
@@ -82,7 +85,13 @@ def _model_bucket(models, model, src):
 def collect(providers, force=False):
     """扫描全部 provider 的 token 用量。返回可直接 JSON 化的结果。"""
     with _LOCK:
+        cfg = pricing.load(cache_dir())
+        prices = cfg["models"]
         cache = {"version": CACHE_VERSION, "files": {}} if force else load_cache()
+        # 高峰时段变了，峰谷拆分要重算，缓存直接作废
+        if cache.get("peak") != cfg["peak"]:
+            cache = {"version": CACHE_VERSION, "files": {}}
+        cache["peak"] = cfg["peak"]
         tools = []
         grand = new_bucket()
         all_days = {}
@@ -94,6 +103,10 @@ def collect(providers, force=False):
                 "installed": p.available(), "root": p.root,
                 "totals": new_bucket(), "days": {}, "models": {},
                 "model_days": {}, "model_hours": {},
+                "model_cost_days": {}, "model_cost_hours": {},
+                "cost_days": {}, "cost_hours": {}, "cost": 0.0,
+                "tracks_errors": bool(getattr(p, "tracks_errors", False)),
+                "tracks_timing": bool(getattr(p, "tracks_timing", False)),
                 "sessions": 0, "approximate": False, "scanned_at": time.time(),
             }
             if row["installed"]:
@@ -115,19 +128,31 @@ def collect(providers, force=False):
                             p.key, new_bucket()), b)
                     for model, b in (e.get("models") or {}).items():
                         _model_bucket(row["models"], model, b)
-                    # 按日 × 模型只保留总量，工作台的模型趋势图用
+                    # 按日 × 模型只保留总量，工作台的模型趋势图用；
+                    # 顺手按模型价目折算成「API 等价」成本，按天存一份
                     for day, by_model in (e.get("mdays") or {}).items():
                         slot = row["model_days"].setdefault(day, {})
+                        cslot = row["model_cost_days"].setdefault(day, {})
                         for model, b in by_model.items():
                             slot[model] = slot.get(model, 0) + bucket_total(b)
+                            amt = pricing.cost_bucket(model, b, prices)
+                            cslot[model] = cslot.get(model, 0.0) + amt
+                            row["cost_days"][day] = (
+                                row["cost_days"].get(day, 0.0) + amt)
                     # 最近几天的「小时」明细：工作台选「当天」时按小时拆
                     for hour, b in (e.get("hours") or {}).items():
                         add_bucket(all_hours.setdefault(hour, {}).setdefault(
                             p.key, new_bucket()), b)
                     for hour, by_model in (e.get("mhours") or {}).items():
                         slot = row["model_hours"].setdefault(hour, {})
+                        cslot = row["model_cost_hours"].setdefault(hour, {})
                         for model, b in by_model.items():
                             slot[model] = slot.get(model, 0) + bucket_total(b)
+                            # 工作台选「价格」且粒度是小时时用（只覆盖最近两三天）
+                            amt = pricing.cost_bucket(model, b, prices)
+                            cslot[model] = cslot.get(model, 0.0) + amt
+                            row["cost_hours"][hour] = (
+                                row["cost_hours"].get(hour, 0.0) + amt)
                 # 清理该工具下已经不存在的文件的缓存（provider 报告了扫描清单才做）
                 last = getattr(p, "last_paths", None)
                 if last is not None:
@@ -137,6 +162,7 @@ def collect(providers, force=False):
                             cache["files"].pop(k, None)
             if not row["installed"]:
                 row["approximate"] = False
+            row["cost"] = sum(row["cost_days"].values())
             add_bucket(grand, row["totals"])
             tools.append(row)
         save_cache(cache)
@@ -147,8 +173,11 @@ def collect(providers, force=False):
             "days": all_days,
             # 小时明细只给最近两天，够「当天」视图用，响应也不至于变大
             "hours": {k: v for k, v in all_hours.items() if k[:10] >= cutoff},
-            "tools": [tool_json(t, cutoff) for t in tools],
+            "tools": [tool_json(t, cutoff, prices) for t in tools],
             "cache_file": cache_path(),
+            "prices_file": pricing.prices_path(cache_dir()),
+            "peak": cfg["peak"],
+            "cny_rate": pricing.cny_rate(),
         }
 
 
@@ -157,8 +186,12 @@ def recent_hours_cutoff():
                          time.localtime(time.time() - 2 * 86400))
 
 
-def tool_json(row, hours_cutoff=None):
-    models = [{"model": m, "tokens": bucket_total(b), "bucket": b}
+def tool_json(row, hours_cutoff=None, prices=None):
+    models = [{"model": m, "tokens": bucket_total(b), "bucket": b,
+               "cost": round(pricing.cost_bucket(m, b, prices), 6),
+               "price": pricing.price_of(m, prices),
+               "price_cny": pricing.price_cny(m, prices),
+               "price_known": pricing.known(m, prices)}
               for m, b in row["models"].items()]
     models.sort(key=lambda x: -x["tokens"])
     return {
@@ -171,6 +204,15 @@ def tool_json(row, hours_cutoff=None):
         "model_days": row["model_days"],
         "model_hours": {k: v for k, v in row["model_hours"].items()
                         if hours_cutoff is None or k[:10] >= hours_cutoff},
+        "model_cost_days": row.get("model_cost_days") or {},
+        "model_cost_hours": {k: v for k, v in (row.get("model_cost_hours") or {}).items()
+                             if hours_cutoff is None or k[:10] >= hours_cutoff},
+        "cost": round(row.get("cost") or 0.0, 6),
+        "cost_days": row.get("cost_days") or {},
+        "cost_hours": {k: v for k, v in (row.get("cost_hours") or {}).items()
+                       if hours_cutoff is None or k[:10] >= hours_cutoff},
+        "tracks_errors": row.get("tracks_errors", False),
+        "tracks_timing": row.get("tracks_timing", False),
         "sessions": row["sessions"],
         "approximate": row["approximate"],
     }

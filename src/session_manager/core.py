@@ -1033,11 +1033,12 @@ def cmd_web(args):
 # ---------- 多工具：tools / usage ----------
 
 def _tok(n):
+    # token 量级按十进制进位：K → M → B → T（和网页工作台保持一致）
     n = float(n or 0)
-    for unit in ("", "K", "M", "G", "T"):
-        if n < 1024 or unit == "T":
+    for unit in ("", "K", "M", "B", "T"):
+        if abs(n) < 1000 or unit == "T":
             return ("%.0f%s" % (n, unit)) if unit == "" else ("%.1f%s" % (n, unit))
-        n /= 1024
+        n /= 1000
     return "%.1fT" % n
 
 

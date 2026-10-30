@@ -15,7 +15,8 @@ a = Analysis(
     datas=[(str(ROOT / "src" / "session_manager" / "webui"), "webui")],
     hiddenimports=[
         "session_manager.core", "session_manager.server",
-        "session_manager.usage", "session_manager.zstd",
+        "session_manager.usage", "session_manager.pricing",
+        "session_manager.zstd",
         "session_manager.providers",
         "session_manager.providers.claude",
         "session_manager.providers.codex",

@@ -21,7 +21,14 @@ Token 用量统一成 bucket：
 
     {"input": 非缓存输入, "cache_read": 缓存读, "cache_write": 缓存写,
      "output": 输出, "reasoning": 推理（已含在 output 里，仅展示用）,
-     "requests": 请求数}
+     "requests": 成功请求数, "errors": 失败请求数,
+     "gen_ms": 有耗时记录的请求总耗时（毫秒）,
+     "gen_tokens": 这些请求的输出 token,
+     "input_off"/"cache_read_off"/"cache_write_off"/"output_off":
+         落在谷时窗口里的那部分 token（是上面四项的子集，只用来算峰谷价）}
+
+后三项只给能解析出来的 provider 填（见 Provider.tracks_errors /
+tracks_timing），解析不出来的保持 0，工作台会显示「—」而不是假装 0。
 """
 from __future__ import annotations
 
@@ -32,13 +39,21 @@ import re
 import shutil
 import time
 
+try:
+    from .. import pricing
+except ImportError:  # 直接跑脚本
+    import pricing  # type: ignore
+
 HOME = os.path.expanduser("~")
 META_SUFFIX = ".meta.json"
 TRASH_NAME = "session-trash"
 APP_TRASH = ".ai-session-manager"
 
 BUCKET_KEYS = ("input", "cache_read", "cache_write", "output",
-               "reasoning", "requests")
+               "reasoning", "requests", "errors", "gen_ms", "gen_tokens",
+               "input_off", "cache_read_off", "cache_write_off", "output_off")
+
+_TOKEN_KEYS = ("input", "cache_read", "cache_write", "output")
 
 
 # ---------- token 计数 ----------
@@ -69,21 +84,40 @@ def add_usage_buckets(days, models, mdays, ts, model, b,
     工作台的模型趋势图需要知道每个模型每天用了多少，所以解析时一并记下来；
     三处口径保持一致，避免各 provider 自己拼出不同的结果。
 
+    落在谷时窗口里的记录，除了照常累加，还会多记一份 *_off 键，成本按
+    峰价 / 谷价分别算（见 pricing.cost_bucket）。
+
     hours / mhours 只保留最近几天的「小时」明细：工作台选「当天」时要把一天
     拆成 24 段，太久以前的小时数据既用不上，也没必要留在缓存里。
     """
     name = model or "unknown"
-    add_bucket(models.setdefault(name, new_bucket()), b)
+    off = _off_bucket(ts, b)
+    _merge_bucket(models.setdefault(name, new_bucket()), b, off)
     day = day_key(ts) if ts is not None else ""
     if not day:
         return
-    add_bucket(days.setdefault(day, new_bucket()), b)
-    add_bucket(mdays.setdefault(day, {}).setdefault(name, new_bucket()), b)
+    _merge_bucket(days.setdefault(day, new_bucket()), b, off)
+    _merge_bucket(mdays.setdefault(day, {}).setdefault(name, new_bucket()), b, off)
     if hours is not None and day >= recent_day_threshold():
         hk = day + "T" + time.strftime("%H", time.localtime(ts))
-        add_bucket(hours.setdefault(hk, new_bucket()), b)
+        _merge_bucket(hours.setdefault(hk, new_bucket()), b, off)
         if mhours is not None:
-            add_bucket(mhours.setdefault(hk, {}).setdefault(name, new_bucket()), b)
+            _merge_bucket(mhours.setdefault(hk, {}).setdefault(name, new_bucket()),
+                          b, off)
+
+
+def _merge_bucket(dst, b, off):
+    add_bucket(dst, b)
+    if off:
+        add_bucket(dst, off)
+
+
+def _off_bucket(ts, b):
+    """谷时窗口内的记录 → 额外的 *_off 桶；不在窗口内返回 None。"""
+    if ts is None or not pricing.is_offpeak(ts):
+        return None
+    out = {k + "_off": b.get(k) for k in _TOKEN_KEYS if b.get(k)}
+    return out or None
 
 
 _RECENT_HOURS_DAYS = 3
@@ -328,6 +362,9 @@ class Provider:
     color = "#b95435"
     hint = ""
     kind = "file"
+    # 能否从会话记录里看出失败请求 / 单次请求耗时（工作台据此决定显示数字还是「—」）
+    tracks_errors = False
+    tracks_timing = False
 
     def __init__(self, root=None):
         self._root = os.path.abspath(os.path.expanduser(root)) if root else None

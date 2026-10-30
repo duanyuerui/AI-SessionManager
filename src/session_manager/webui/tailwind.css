@@ -275,7 +275,7 @@
   @media (hover: none) { .rowact { @apply opacity-100; } }
 
   .row-btn {
-    @apply inline-flex h-6 items-center rounded-md border border-transparent px-1.5
+    @apply inline-flex h-6 items-center whitespace-nowrap rounded-md border border-transparent px-1.5
            text-[11.5px] font-medium text-muted transition
            hover:border-line hover:bg-surface hover:text-ink;
   }
@@ -298,6 +298,26 @@
     @apply mt-0.5 text-[21px] font-semibold leading-7 tabular-nums tracking-tight;
   }
   .tile-sub { @apply mt-0.5 text-[11.5px] tabular-nums text-muted; }
+
+  /* 价目页 */
+  .price-table { @apply min-w-[1040px]; }
+  .price-table td { @apply py-1.5; }
+  .price-table .p-model { @apply w-[230px]; }
+  .price-table .p-use { @apply w-[96px] whitespace-nowrap text-right text-[11.5px] tabular-nums text-muted; }
+  .price-table .p-num { @apply w-[94px] text-right; }
+  .price-table .price-act { @apply w-[74px] text-right; }
+  .price-table .price-off { box-shadow: inset 1px 0 0 rgb(var(--c-line)); }
+  .p-input {
+    @apply h-7 w-[76px] rounded-md border border-line bg-surface px-1.5 text-right
+           text-[12px] tabular-nums text-ink outline-none transition
+           focus:border-accent/60 focus:ring-2 focus:ring-accent/15;
+  }
+  .p-input.is-off { @apply bg-surface-2/50; }
+  .p-input::placeholder { @apply text-[10.5px] text-faint; }
+  .p-input::-webkit-outer-spin-button, .p-input::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
+  }
+  .p-input[type="number"] { -moz-appearance: textfield; }
 
   /* 图表 */
   .chart-wrap { @apply relative; }

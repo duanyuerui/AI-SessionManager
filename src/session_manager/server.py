@@ -31,11 +31,13 @@ if HERE not in sys.path:
 
 try:
     from . import core as sm
+    from . import pricing
     from . import providers
     from . import usage as usage_mod
     from .providers.base import bucket_total, human_size, session_json, short_path
 except ImportError:  # 直接运行本文件
     import core as sm  # type: ignore
+    import pricing  # type: ignore
     import providers  # type: ignore
     import usage as usage_mod  # type: ignore
     from providers.base import (bucket_total, human_size, session_json,  # type: ignore
@@ -312,6 +314,37 @@ def usage_json(root=None, force=False):
     return usage_mod.collect(_installed_providers(), force=force)
 
 
+def prices_json():
+    """「价目」页：内置价目 + 自定义价目 + 谷时窗口。"""
+    cache_dir = usage_mod.cache_dir()
+    cfg = pricing.load(cache_dir)
+    overrides = cfg["models"]
+    return {
+        "file": pricing.prices_path(cache_dir),
+        "peak": cfg["peak"],
+        "cny_rate": pricing.cny_rate(),
+        "overrides": overrides,
+        "effective": {name: pricing.price_of(name, overrides) for name in overrides},
+        "effective_cny": {name: pricing.price_cny(name, overrides) for name in overrides},
+        "builtin": pricing.builtin_rows(),
+        "fallback": dict(pricing.FALLBACK),
+    }
+
+
+def save_prices(body):
+    if not isinstance(body, dict):
+        raise ValueError("请求体不合法")
+    models = body.get("models") or {}
+    if not isinstance(models, dict):
+        raise ValueError("models 必须是对象")
+    peak = body.get("peak")
+    weekdays = body.get("peak_weekdays")
+    path = pricing.save(usage_mod.cache_dir(), models, peak,
+                        True if weekdays is None else bool(weekdays))
+    invalidate_tools()
+    return {"ok": True, "file": path, "peak": pricing.peak_key()}
+
+
 # ---------- HTTP ----------
 
 LAST_HIT = [0.0]  # 最后一次请求时间（客户端模式用来判断窗口是不是已经关了）
@@ -416,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
                                             qs.get("id", "")))
             if u.path == "/api/usage":
                 return self._json(usage_json(force=qs.get("refresh") == "1"))
+            if u.path == "/api/prices":
+                return self._json(prices_json())
             return self._json({"error": "not found"}, 404)
         except (ValueError, sm.UserError) as e:
             return self._json({"error": str(e)}, 400)
@@ -434,6 +469,8 @@ class Handler(BaseHTTPRequestHandler):
                 if APP_MODE[0] and (q.get("app") or [""])[-1] == "1":
                     CLOSE_AT[0] = time.time()
                 return self._json({"ok": True})
+            if u.path == "/api/prices":
+                return self._json(save_prices(body))
             key = body.get("tool") or "claude"
             p = provider(key)
             if u.path == "/api/delete":
