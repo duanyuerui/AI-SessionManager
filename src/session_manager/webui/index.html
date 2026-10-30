@@ -55,6 +55,7 @@
           <option value="60">1分钟</option>
         </select>
       </div>
+      <div class="mb-1 px-1 text-[9.5px] text-faint" id="autoStamp"></div>
       <div class="flex items-center gap-1">
         <button class="btn-ghost flex-1" id="btnTheme" type="button" title="外观"></button>
         <button class="btn-ghost shrink-0" id="btnScan" type="button" title="立即扫描本机 AI 客户端">
@@ -1192,6 +1193,7 @@
   const AUTO_KEY = "aism-auto-scan";
   let autoTimer = null;
   let autoBusy = false;
+  let autoDoneAt = Date.now();
 
   function setAutoScan(sec, save) {
     state.autoSec = sec;
@@ -1202,9 +1204,22 @@
     if (sec > 0) autoTimer = setInterval(autoScanTick, sec * 1000);
   }
 
+  function stampAutoScan() {
+    const el = $("autoStamp");
+    if (!el) return;
+    if (!state.autoSec) { el.textContent = ""; return; }
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, "0");
+    el.textContent = "上次自动扫描 " + p(d.getHours()) + ":"
+      + p(d.getMinutes()) + ":" + p(d.getSeconds());
+  }
+
   async function autoScanTick() {
+    // 最小化 / 被别的窗口完全挡住时，浏览器会把页面判成 hidden 并冻结定时器，
+    // 这里也跳过；切回前台由下面的 visibilitychange / focus 立刻补一次。
     if (document.hidden || autoBusy) return;
     autoBusy = true;
+    let ok = false;
     try {
       await loadTools(true);
       if (state.view === "workbench") {
@@ -1220,16 +1235,32 @@
         if (doc) doc.scrollTop = docTop;
         if (state.tab === "trash") await loadTrash();
       }
+      ok = true;
     } catch (e) {
       // 自动刷新失败不打扰用户，等下一轮
     } finally {
       autoBusy = false;
+      autoDoneAt = Date.now();
+      if (ok) stampAutoScan();
     }
   }
+
+  // 后台期间定时器会被冻结，切回来时立刻补扫一次，别让用户盯着旧数据等下一轮
+  function autoScanNow() {
+    if (!state.autoSec || document.hidden || autoBusy) return;
+    if (Date.now() - autoDoneAt < 3000) return;  // 刚扫过就别重复扫
+    autoScanTick();
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) autoScanNow();
+  });
+  window.addEventListener("focus", autoScanNow);
 
   $("autoScan").onchange = (e) => {
     const sec = parseInt(e.target.value, 10) || 0;
     setAutoScan(sec);
+    if (sec) autoScanTick();  // 选完马上扫一次，设置立刻见效
+    else stampAutoScan();
     toast(sec ? "自动扫描已开启" : "已关闭自动扫描",
           sec ? (sec >= 60 ? "每 1 分钟重新扫描一次" : `每 ${sec} 秒重新扫描一次`) : "", "ok");
   };
