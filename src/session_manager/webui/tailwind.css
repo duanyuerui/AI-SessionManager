@@ -30,6 +30,17 @@
     --c-tool-zcode: 42 120 214;      /* #2a78d6 蓝 */
     --c-tool-other: 138 143 152;      /* 中性灰：其他 AI 聚合 */
 
+    /* 折线图模型色位：与工具色同一套已验证的分类色板，按固定顺序取用 */
+    --c-series-1: 42 120 214;        /* #2a78d6 */
+    --c-series-2: 235 104 52;        /* #eb6834 */
+    --c-series-3: 27 175 122;        /* #1baf7a */
+    --c-series-4: 237 161 0;         /* #eda100 */
+    --c-series-5: 232 123 164;       /* #e87ba4 */
+    --c-series-6: 0 131 0;           /* #008300 */
+    --c-series-7: 98 80 214;         /* #6250d6 */
+    --c-series-8: 227 73 72;         /* #e34948 */
+    --c-series-other: 138 143 152;   /* 聚合项 */
+
     --side-w: 216px;
   }
 
@@ -56,6 +67,17 @@
     --c-tool-workbuddy: 213 81 129;  /* #d55181 */
     --c-tool-zcode: 57 135 229;      /* #3987e5 */
     --c-tool-other: 150 156 165;
+
+    /* 同一批色相的深色档，单独验证过对比度 */
+    --c-series-1: 57 135 229;        /* #3987e5 */
+    --c-series-2: 217 89 38;         /* #d95926 */
+    --c-series-3: 25 158 112;        /* #199e70 */
+    --c-series-4: 201 133 0;         /* #c98500 */
+    --c-series-5: 213 81 129;        /* #d55181 */
+    --c-series-6: 0 131 0;           /* #008300 */
+    --c-series-7: 144 133 233;       /* #9085e9 */
+    --c-series-8: 230 103 103;       /* #e66767 */
+    --c-series-other: 150 156 165;
   }
 
   html { color-scheme: light; }
@@ -322,6 +344,27 @@
   .legend { @apply flex flex-wrap items-center gap-x-4 gap-y-1.5; }
   .legend-item { @apply inline-flex items-center gap-1.5 text-[11.5px] text-muted; }
   .legend-val { @apply tabular-nums text-ink-2; }
+
+  /* 折线图（模型 / Agent 趋势） */
+  .line-chart { @apply relative min-w-0; }
+  .line-svg { display: block; width: 100%; }
+  .line-grid { stroke: rgb(var(--c-line)); stroke-width: 1; }
+  .line-tick {
+    fill: rgb(var(--c-faint)); font-size: 10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .line-path {
+    fill: none; stroke-width: 2;
+    stroke-linecap: round; stroke-linejoin: round;
+  }
+  .line-endlabel { fill: rgb(var(--c-ink-2)); font-size: 10.5px; }
+  .line-cross {
+    stroke: rgb(var(--c-line-strong)); stroke-width: 1;
+    pointer-events: none;
+  }
+  .line-hit { outline: none; cursor: crosshair; }
+  .line-hit:focus-visible { stroke: rgb(var(--c-accent)); stroke-width: 1; }
+  .line-swatch { @apply inline-block h-2 w-2 shrink-0 rounded-full; }
 
   .tool-row { @apply flex items-center gap-3 border-t border-line px-4 py-2.5 first:border-t-0; }
   .share-track { @apply h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2; }

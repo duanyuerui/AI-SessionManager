@@ -27,7 +27,7 @@ except ImportError:  # 直接跑脚本
     from providers.base import (BUCKET_KEYS, add_bucket, bucket_total,  # type: ignore
                                 new_bucket)
 
-CACHE_VERSION = 2
+CACHE_VERSION = 4
 _CACHE_NAME = "usage-cache.json"
 _LOCK = threading.Lock()
 
@@ -86,12 +86,14 @@ def collect(providers, force=False):
         tools = []
         grand = new_bucket()
         all_days = {}
+        all_hours = {}
         live_keys = set()
         for p in providers:
             row = {
                 "key": p.key, "name": p.name, "color": p.color,
                 "installed": p.available(), "root": p.root,
                 "totals": new_bucket(), "days": {}, "models": {},
+                "model_days": {}, "model_hours": {},
                 "sessions": 0, "approximate": False, "scanned_at": time.time(),
             }
             if row["installed"]:
@@ -113,6 +115,19 @@ def collect(providers, force=False):
                             p.key, new_bucket()), b)
                     for model, b in (e.get("models") or {}).items():
                         _model_bucket(row["models"], model, b)
+                    # 按日 × 模型只保留总量，工作台的模型趋势图用
+                    for day, by_model in (e.get("mdays") or {}).items():
+                        slot = row["model_days"].setdefault(day, {})
+                        for model, b in by_model.items():
+                            slot[model] = slot.get(model, 0) + bucket_total(b)
+                    # 最近几天的「小时」明细：工作台选「当天」时按小时拆
+                    for hour, b in (e.get("hours") or {}).items():
+                        add_bucket(all_hours.setdefault(hour, {}).setdefault(
+                            p.key, new_bucket()), b)
+                    for hour, by_model in (e.get("mhours") or {}).items():
+                        slot = row["model_hours"].setdefault(hour, {})
+                        for model, b in by_model.items():
+                            slot[model] = slot.get(model, 0) + bucket_total(b)
                 # 清理该工具下已经不存在的文件的缓存（provider 报告了扫描清单才做）
                 last = getattr(p, "last_paths", None)
                 if last is not None:
@@ -125,16 +140,24 @@ def collect(providers, force=False):
             add_bucket(grand, row["totals"])
             tools.append(row)
         save_cache(cache)
+        cutoff = recent_hours_cutoff()
         return {
             "generated": time.time(),
             "totals": grand,
             "days": all_days,
-            "tools": [tool_json(t) for t in tools],
+            # 小时明细只给最近两天，够「当天」视图用，响应也不至于变大
+            "hours": {k: v for k, v in all_hours.items() if k[:10] >= cutoff},
+            "tools": [tool_json(t, cutoff) for t in tools],
             "cache_file": cache_path(),
         }
 
 
-def tool_json(row):
+def recent_hours_cutoff():
+    return time.strftime("%Y-%m-%d",
+                         time.localtime(time.time() - 2 * 86400))
+
+
+def tool_json(row, hours_cutoff=None):
     models = [{"model": m, "tokens": bucket_total(b), "bucket": b}
               for m, b in row["models"].items()]
     models.sort(key=lambda x: -x["tokens"])
@@ -145,6 +168,9 @@ def tool_json(row):
         "total": bucket_total(row["totals"]),
         "days": row["days"],
         "models": models,
+        "model_days": row["model_days"],
+        "model_hours": {k: v for k, v in row["model_hours"].items()
+                        if hours_cutoff is None or k[:10] >= hours_cutoff},
         "sessions": row["sessions"],
         "approximate": row["approximate"],
     }

@@ -62,6 +62,44 @@ def merge_bucket(dst, src):
     return add_bucket(dst, src)
 
 
+def add_usage_buckets(days, models, mdays, ts, model, b,
+                      hours=None, mhours=None):
+    """按日 / 按模型 / 按「日 × 模型」三份汇总一起累加。
+
+    工作台的模型趋势图需要知道每个模型每天用了多少，所以解析时一并记下来；
+    三处口径保持一致，避免各 provider 自己拼出不同的结果。
+
+    hours / mhours 只保留最近几天的「小时」明细：工作台选「当天」时要把一天
+    拆成 24 段，太久以前的小时数据既用不上，也没必要留在缓存里。
+    """
+    name = model or "unknown"
+    add_bucket(models.setdefault(name, new_bucket()), b)
+    day = day_key(ts) if ts is not None else ""
+    if not day:
+        return
+    add_bucket(days.setdefault(day, new_bucket()), b)
+    add_bucket(mdays.setdefault(day, {}).setdefault(name, new_bucket()), b)
+    if hours is not None and day >= recent_day_threshold():
+        hk = day + "T" + time.strftime("%H", time.localtime(ts))
+        add_bucket(hours.setdefault(hk, new_bucket()), b)
+        if mhours is not None:
+            add_bucket(mhours.setdefault(hk, {}).setdefault(name, new_bucket()), b)
+
+
+_RECENT_HOURS_DAYS = 3
+_RECENT_THRESHOLD = [None, ""]
+
+
+def recent_day_threshold():
+    """小时明细的保留窗口（YYYY-MM-DD），按天刷新，避免每条记录都算一次。"""
+    today = time.strftime("%Y-%m-%d")
+    if _RECENT_THRESHOLD[0] != today:
+        _RECENT_THRESHOLD[0] = today
+        _RECENT_THRESHOLD[1] = time.strftime(
+            "%Y-%m-%d", time.localtime(time.time() - _RECENT_HOURS_DAYS * 86400))
+    return _RECENT_THRESHOLD[1]
+
+
 def bucket_total(b):
     return (b.get("input", 0) + b.get("cache_read", 0)
             + b.get("cache_write", 0) + b.get("output", 0))

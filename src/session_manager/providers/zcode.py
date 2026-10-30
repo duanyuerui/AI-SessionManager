@@ -15,8 +15,8 @@ import os
 import sqlite3
 import time
 
-from .base import (Provider, add_bucket, bucket_total, day_key, human_size,
-                   new_bucket, to_epoch)
+from .base import (Provider, add_bucket, add_usage_buckets, bucket_total,
+                   day_key, human_size, new_bucket, to_epoch)
 
 _QUICK = {}  # db 路径 -> (时间, (会话数, 占用))
 
@@ -87,14 +87,12 @@ class ZcodeProvider(Provider):
             b = _bucket_from_row(r)
             e = out.setdefault(sid, {
                 "sid": sid, "totals": new_bucket(), "days": {}, "models": {},
-                "meta": {},
+                "mdays": {}, "hours": {}, "mhours": {}, "meta": {},
             })
             add_bucket(e["totals"], b)
-            dk = day_key(to_epoch(r["started_at"])) or ""
-            if dk:
-                add_bucket(e["days"].setdefault(dk, new_bucket()), b)
-            add_bucket(e["models"].setdefault(r["model_id"] or "unknown",
-                                              new_bucket()), b)
+            ts = to_epoch(r["started_at"])
+            add_usage_buckets(e["days"], e["models"], e["mdays"], ts,
+                              r["model_id"], b, e["hours"], e["mhours"])
         return out
 
     def _rows(self, deleted=False):

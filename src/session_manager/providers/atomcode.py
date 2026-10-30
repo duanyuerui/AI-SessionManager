@@ -12,8 +12,8 @@ import os
 import shutil
 import time
 
-from .base import (Provider, app_trash_root, add_bucket, day_key,
-                   human_size, new_bucket, to_epoch)
+from .base import (Provider, app_trash_root, add_bucket, add_usage_buckets,
+                   day_key, human_size, new_bucket, to_epoch)
 from .generic import _find_usage, normalize_usage, pick_role, pick_text, real_text
 
 
@@ -72,6 +72,9 @@ class AtomCodeProvider(Provider):
         total = new_bucket()
         days = {}
         models = {}
+        mdays = {}
+        hours = {}
+        mhours = {}
         first_ts = last_ts = None
         first_text = last_text = ""
         users = asst = 0
@@ -115,11 +118,8 @@ class AtomCodeProvider(Provider):
                     b = normalize_usage(u)
                     if b:
                         add_bucket(total, b)
-                        dk = day_key(ts) or ""
-                        if dk:
-                            add_bucket(days.setdefault(dk, new_bucket()), b)
-                        add_bucket(models.setdefault(model or "unknown",
-                                                     new_bucket()), b)
+                        add_usage_buckets(days, models, mdays, ts, model, b,
+                                          hours, mhours)
         created = to_epoch(meta.get("created_at"))
         updated = to_epoch(meta.get("updated_at"))
         first_ts = first_ts or created
@@ -132,6 +132,8 @@ class AtomCodeProvider(Provider):
         return {
             "sid": sid,
             "totals": total, "days": days, "models": models,
+            "mdays": mdays,
+            "hours": hours, "mhours": mhours,
             "meta": {
                 "cwd": meta.get("working_dir") or "",
                 "title": title, "users": users, "asst": asst,

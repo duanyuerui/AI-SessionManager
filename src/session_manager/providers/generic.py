@@ -19,9 +19,9 @@ import os
 import re
 import time
 
-from .base import (FileTrash, Provider, add_bucket, app_trash_root,
-                   cached_entry, day_key, dir_size, human_size, new_bucket,
-                   to_epoch)
+from .base import (FileTrash, Provider, add_bucket, add_usage_buckets,
+                   app_trash_root, cached_entry, day_key, dir_size,
+                   human_size, new_bucket, to_epoch)
 
 JSON_MAX = 32 * 1024 * 1024
 HEAD_BYTES = 65536
@@ -232,6 +232,9 @@ class _Acc:
         self.totals = new_bucket()
         self.days = {}
         self.models = {}
+        self.mdays = {}
+        self.hours = {}
+        self.mhours = {}
         self.seen = set()
         self.users = 0
         self.asst = 0
@@ -249,10 +252,8 @@ class _Acc:
             return
         self.seen.add(key)
         add_bucket(self.totals, b)
-        dk = day_key(ts) or ""
-        if dk:
-            add_bucket(self.days.setdefault(dk, new_bucket()), b)
-        add_bucket(self.models.setdefault(model or "unknown", new_bucket()), b)
+        add_usage_buckets(self.days, self.models, self.mdays, ts, model, b,
+                          self.hours, self.mhours)
 
     def add_message(self, role, text, ts):
         if not text:
@@ -282,6 +283,8 @@ def _entry(path, acc, sid=""):
     return {
         "sid": sid or os.path.splitext(os.path.basename(path))[0],
         "totals": acc.totals, "days": acc.days, "models": acc.models,
+        "mdays": acc.mdays,
+        "hours": acc.hours, "mhours": acc.mhours,
         "meta": {
             "cwd": acc.cwd, "title": acc.title, "users": acc.users,
             "asst": acc.asst, "first_text": acc.first_text[:400],
@@ -638,6 +641,9 @@ class TaskDirProvider(Provider):
         totals = new_bucket()
         days = {}
         models = {}
+        mdays = {}
+        hours = {}
+        mhours = {}
         title = ""
         first_text = last_text = ""
         first_ts = last_ts = None
@@ -656,11 +662,9 @@ class TaskDirProvider(Provider):
                     b["cache_write"] = _num(md.get("cacheWrites"))
                     b["requests"] = 1
                     add_bucket(totals, b)
-                    dk = day_key(os.path.getmtime(meta_path))
-                    if dk:
-                        add_bucket(days.setdefault(dk, new_bucket()), b)
-                    add_bucket(models.setdefault(md.get("model") or "unknown",
-                                                 new_bucket()), b)
+                    add_usage_buckets(days, models, mdays,
+                                      os.path.getmtime(meta_path),
+                                      md.get("model"), b, hours, mhours)
             except (OSError, ValueError):
                 pass
         hist = None
@@ -692,10 +696,10 @@ class TaskDirProvider(Provider):
                     b = normalize_usage(u)
                     if b:
                         add_bucket(totals, b)
-                        dk = day_key(pick_ts(m) or os.path.getmtime(d))
-                        if dk:
-                            add_bucket(days.setdefault(dk, new_bucket()), b)
-                        add_bucket(models.setdefault("unknown", new_bucket()), b)
+                        add_usage_buckets(
+                            days, models, mdays,
+                            pick_ts(m) or os.path.getmtime(d),
+                            "unknown", b, hours, mhours)
         ui = os.path.join(d, "ui_messages.json")
         if os.path.isfile(ui):
             try:
@@ -719,6 +723,8 @@ class TaskDirProvider(Provider):
                 pass
         return {
             "sid": sid, "totals": totals, "days": days, "models": models,
+            "mdays": mdays,
+            "hours": hours, "mhours": mhours,
             "meta": {"title": title, "users": users, "asst": asst,
                      "first_text": first_text, "last_text": last_text,
                      "first_ts": first_ts, "last_ts": last_ts, "cwd": ""},

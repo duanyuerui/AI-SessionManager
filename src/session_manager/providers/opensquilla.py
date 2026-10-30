@@ -24,8 +24,8 @@ import sqlite3
 import subprocess
 import time
 
-from .base import (Provider, add_bucket, app_trash_root, bucket_total, day_key,
-                   human_size, new_bucket, to_epoch)
+from .base import (Provider, add_bucket, add_usage_buckets, app_trash_root,
+                   bucket_total, day_key, human_size, new_bucket, to_epoch)
 
 _QUICK = {}  # db 路径 -> (时间, (会话数, 占用))
 _DB_NAMES = ("sessions.db", "session.db", "sessions.sqlite",
@@ -245,7 +245,8 @@ class OpenSquillaProvider(Provider):
                 continue
             b = _bucket(r["inp"], r["cr"], r["cw"], r["outp"], r["rsn"])
             e = out.setdefault(sid, {"sid": sid, "totals": new_bucket(),
-                                     "days": {}, "models": {}, "meta": {}})
+                                     "days": {}, "models": {}, "mdays": {},
+                                     "hours": {}, "mhours": {}, "meta": {}})
             # 请求数按 event 计，不按 item 计
             eid = r["eid"]
             req = 0
@@ -254,11 +255,9 @@ class OpenSquillaProvider(Provider):
                 req = 1
             b["requests"] = req
             add_bucket(e["totals"], b)
-            dk = day_key(to_epoch(r["ts"])) or ""
-            if dk:
-                add_bucket(e["days"].setdefault(dk, new_bucket()), b)
-            add_bucket(e["models"].setdefault(r["model"] or "unknown",
-                                              new_bucket()), b)
+            ts = to_epoch(r["ts"])
+            add_usage_buckets(e["days"], e["models"], e["mdays"], ts,
+                              r["model"], b, e["hours"], e["mhours"])
         return out
 
     def _session_row_bucket(self, r):

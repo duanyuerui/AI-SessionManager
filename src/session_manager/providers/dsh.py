@@ -14,8 +14,9 @@ import re
 import time
 
 from .. import zstd
-from .base import (FileTrash, Provider, TRASH_NAME, add_bucket, cached_entry,
-                   day_key, dir_size, human_size, new_bucket, to_epoch)
+from .base import (FileTrash, Provider, TRASH_NAME, add_bucket,
+                   add_usage_buckets, cached_entry, day_key, dir_size,
+                   human_size, new_bucket, to_epoch)
 
 SESSION_FILE = "session.v4.jsonl.zstd"
 _SID_IN_DIR = re.compile(r"^(session-[0-9a-fA-F-]+)$")
@@ -41,6 +42,9 @@ def parse_usage(path):
     totals = new_bucket()
     days = {}
     models = {}
+    mdays = {}
+    hours = {}
+    mhours = {}
     sid = ""
     cwd = ""
     title = ""
@@ -101,14 +105,13 @@ def parse_usage(path):
             b["reasoning"] = int(u.get("reasoningTokens") or 0)
             b["requests"] = 1
             add_bucket(totals, b)
-            dk = day_key(ts) or ""
-            if dk:
-                add_bucket(days.setdefault(dk, new_bucket()), b)
-            add_bucket(models.setdefault(model or "unknown", new_bucket()), b)
+            add_usage_buckets(days, models, mdays, ts, model, b, hours, mhours)
     if not sid:
         sid = os.path.basename(os.path.dirname(path))
     return {
         "sid": sid, "totals": totals, "days": days, "models": models,
+        "mdays": mdays,
+        "hours": hours, "mhours": mhours,
         "meta": {"cwd": cwd, "title": title, "users": users,
                  "first_text": first_text[:400], "last_text": last_text[:400],
                  "first_ts": first_ts, "last_ts": last_ts},

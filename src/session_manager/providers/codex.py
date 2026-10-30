@@ -12,8 +12,9 @@ import os
 import re
 import time
 
-from .base import (FileTrash, Provider, TRASH_NAME, add_bucket, cached_entry,
-                   day_key, human_size, new_bucket, to_epoch)
+from .base import (FileTrash, Provider, TRASH_NAME, add_bucket,
+                   add_usage_buckets, cached_entry, day_key, human_size,
+                   new_bucket, to_epoch)
 
 _SID_RE = re.compile(r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
                      r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
@@ -43,6 +44,9 @@ def parse_usage(path):
     totals = new_bucket()
     days = {}
     models = {}
+    mdays = {}
+    hours = {}
+    mhours = {}
     sid = ""
     cwd = ""
     model = ""
@@ -112,15 +116,15 @@ def parse_usage(path):
                 b["reasoning"] = max(0, int(u.get("reasoning_output_tokens") or 0))
                 b["requests"] = 1 if int(u.get("total_tokens") or 0) else 0
                 add_bucket(totals, b)
-                dk = day_key(ts) or ""
-                if dk:
-                    add_bucket(days.setdefault(dk, new_bucket()), b)
-                add_bucket(models.setdefault(model or "unknown", new_bucket()), b)
+                add_usage_buckets(days, models, mdays, ts, model, b,
+                                  hours, mhours)
     if not sid:
         m = _SID_RE.search(os.path.basename(path))
         sid = m.group(1) if m else os.path.splitext(os.path.basename(path))[0]
     return {
         "sid": sid, "totals": totals, "days": days, "models": models,
+        "mdays": mdays,
+        "hours": hours, "mhours": mhours,
         "meta": {"cwd": cwd, "users": users, "model": model,
                  "first_text": first_text[:400], "last_text": last_text[:400],
                  "first_ts": first_ts, "last_ts": last_ts},

@@ -129,6 +129,23 @@
         </div>
 
         <div class="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div class="card p-4" id="wbModelCard">
+            <div class="mb-1 flex flex-wrap items-baseline gap-2">
+              <h2 class="text-[13.5px] font-semibold">模型趋势</h2>
+              <span class="text-[11.5px] text-faint" id="wbModelDesc"></span>
+            </div>
+            <div class="line-chart" id="wbModelChart"></div>
+          </div>
+          <div class="card p-4" id="wbToolCard">
+            <div class="mb-1 flex flex-wrap items-baseline gap-2">
+              <h2 class="text-[13.5px] font-semibold">工具趋势</h2>
+              <span class="text-[11.5px] text-faint" id="wbToolDesc"></span>
+            </div>
+            <div class="line-chart" id="wbToolChart"></div>
+          </div>
+        </div>
+
+        <div class="mt-3 grid grid-cols-1 gap-3 lg:grid-cols-2">
           <div class="card overflow-hidden">
             <div class="flex items-center gap-2 border-b border-line px-4 py-2.5">
               <h2 class="text-[13.5px] font-semibold">按工具</h2>
@@ -424,7 +441,10 @@
   };
   const TOOL_ORDER = ["claude", "codex", "dsh", "workbuddy", "zcode"];
   const PERIOD_LABEL = { day: "日", week: "周", month: "月", year: "年" };
-  const RANGES = { day: [7, 30, 90], week: [8, 16, 52], month: [6, 12, 24], year: [3, 5, 10] };
+  const RANGES = { day: [1, 7, 30, 90], week: [1, 8, 16, 52],
+                   month: [1, 6, 12, 24], year: [1, 3, 5, 10] };
+  // 每个周期都多给一个「当期」选项：日=当天、周=本周、月=当月、年=今年
+  const SINGLE_LABEL = { day: "当天", week: "近一周", month: "当月", year: "今年" };
 
   const state = {
     tools: [],
@@ -666,6 +686,7 @@
       b.classList.toggle("active", view === "workbench"));
     document.querySelectorAll("#navTools button[data-tool]").forEach((b) =>
       b.classList.toggle("active", b.getAttribute("data-tool") === view));
+    if (view === "workbench" && state.usage) requestAnimationFrame(renderLineCharts);
   }
 
   async function openTool(key) {
@@ -729,15 +750,6 @@
     const p = s.split("-").map(Number);
     return new Date(p[0], p[1] - 1, p[2], 12);
   }
-  function periodKeyOf(day, period) {
-    if (period === "day") return day;
-    if (period === "month") return day.slice(0, 7);
-    if (period === "year") return day.slice(0, 4);
-    const d = parseDay(day);
-    const monday = new Date(d);
-    monday.setDate(d.getDate() - ((d.getDay() + 6) % 7));
-    return dayKeyOf(monday);
-  }
 
   function periodList(period, n) {
     const now = new Date();
@@ -774,12 +786,15 @@
   function rangeUnit(period) {
     return { day: "天", week: "周", month: "个月", year: "年" }[period];
   }
+  function rangeLabel(period, n) {
+    return n === 1 ? SINGLE_LABEL[period] : "近" + n + rangeUnit(period);
+  }
 
   function syncRangeUi() {
     const opts = rangeOptions(state.period);
     if (!opts.includes(state.range)) state.range = opts[1] || opts[0];
     $("wbRange").innerHTML = opts.map((n) =>
-      `<button class="seg-btn ${n === state.range ? "active" : ""}" type="button" data-range="${n}">近${n}${rangeUnit(state.period)}</button>`
+      `<button class="seg-btn ${n === state.range ? "active" : ""}" type="button" data-range="${n}">${rangeLabel(state.period, n)}</button>`
     ).join("");
   }
 
@@ -787,9 +802,9 @@
     // 当前区间内，每个工具的总量
     const out = {};
     const days = (state.usage && state.usage.days) || {};
-    const allowed = new Set(periodList(state.period, state.range).map((p) => p.key));
+    const win = dayWindow();
     for (const day of Object.keys(days)) {
-      if (!allowed.has(periodKeyOf(day, state.period))) continue;
+      if (win && (day < win.from || day > win.to)) continue;
       for (const [tool, b] of Object.entries(days[day])) {
         out[tool] = (out[tool] || 0) + totalOf(b);
       }
@@ -877,16 +892,113 @@
     renderNote();
   }
 
+  // 展示粒度：选「当期」时细分（当天→小时、近一周→天、当月→周、今年→月），
+  // 选「近 N 期」时按所选周期聚合
+  const UNIT_LABEL = { hour: "小时", day: "天", week: "周", month: "月", year: "年" };
+
+  function trendSpec() {
+    const now = new Date();
+    now.setHours(12, 0, 0, 0);
+    const today = dayKeyOf(now);
+    const p = state.period, n = state.range;
+    const withRange = (list) => list.map((s) => ({ ...s, from: s.key, to: s.key }));
+    if (n === 1) {
+      if (p === "day") {
+        const slots = [];
+        for (let h = 0; h <= now.getHours(); h++) {
+          const hh = pad2(h);
+          slots.push({ key: today + "T" + hh, label: hh + ":00",
+                       from: today + "T" + hh, to: today + "T" + hh + ":59" });
+        }
+        return { unit: "hour", slots };
+      }
+      if (p === "week") {
+        return { unit: "day", slots: withRange(periodList("day", 7)) };
+      }
+      if (p === "month") {
+        // 当月按自然周切：从 1 号所在那周开始，到本周为止
+        const y = now.getFullYear(), m = now.getMonth();
+        const first = new Date(y, m, 1, 12);
+        const cur = new Date(first);
+        cur.setDate(cur.getDate() - ((cur.getDay() + 6) % 7));
+        const slots = [];
+        let idx = 1;
+        while (cur <= now) {
+          const end = new Date(cur);
+          end.setDate(end.getDate() + 6);
+          const from = cur < first ? first : cur;
+          if (from <= now) {
+            slots.push({ key: dayKeyOf(cur), label: "第" + idx + "周",
+                         from: dayKeyOf(from),
+                         to: dayKeyOf(end > now ? now : end) });
+            idx++;
+          }
+          cur.setDate(cur.getDate() + 7);
+        }
+        return { unit: "week", slots };
+      }
+      // 今年按自然月切：1 月到本月
+      const y = now.getFullYear();
+      const slots = [];
+      for (let m = 0; m <= now.getMonth(); m++) {
+        const last = new Date(y, m + 1, 0, 12);
+        const to = dayKeyOf(last) < today ? dayKeyOf(last) : today;
+        slots.push({ key: y + "-" + pad2(m + 1), label: (m + 1) + "月",
+                     from: y + "-" + pad2(m + 1) + "-01", to });
+      }
+      return { unit: "month", slots };
+    }
+    const unit = p;
+    const slots = periodList(p, n).map((s) => {
+      if (unit === "day") return { ...s, from: s.key, to: s.key };
+      if (unit === "week") {
+        const end = parseDay(s.key);
+        end.setDate(end.getDate() + 6);
+        return { ...s, from: s.key, to: dayKeyOf(end) };
+      }
+      if (unit === "month") {
+        const parts = s.key.split("-").map(Number);
+        const last = new Date(parts[0], parts[1], 0, 12);
+        return { ...s, from: s.key + "-01", to: dayKeyOf(last) };
+      }
+      return { ...s, from: s.key + "-01-01", to: s.key + "-12-31" };
+    });
+    return { unit, slots };
+  }
+
+  function slotIndexer(unit, slots) {
+    if (unit === "hour") {
+      const map = new Map(slots.map((s, i) => [s.key, i]));
+      return (k) => (map.has(k) ? map.get(k) : -1);
+    }
+    return (k) => {
+      const day = k.slice(0, 10);
+      for (let i = 0; i < slots.length; i++) {
+        if (day >= slots[i].from && day <= slots[i].to) return i;
+      }
+      return -1;
+    };
+  }
+
+  // 当前区间的起止日期（按天），概览数字和「按工具」共用
+  function dayWindow() {
+    const { slots } = trendSpec();
+    if (!slots.length) return null;
+    return { from: slots[0].from.slice(0, 10),
+             to: slots[slots.length - 1].to.slice(0, 10) };
+  }
+
   function seriesData() {
-    const periods = periodList(state.period, state.range);
-    const map = new Map(periods.map((p) =>
-      [p.key, { key: p.key, label: p.label, tools: {}, total: 0 }]));
+    const { unit, slots } = trendSpec();
+    const src = (state.usage && (unit === "hour" ? state.usage.hours : state.usage.days)) || {};
+    const out = slots.map((s) => ({ key: s.key, label: s.label, tools: {}, total: 0 }));
+    const idxOf = slotIndexer(unit, slots);
     const prim = new Set(primaryKeys());
-    const days = (state.usage && state.usage.days) || {};
-    for (const day of Object.keys(days)) {
-      const slot = map.get(periodKeyOf(day, state.period));
-      if (!slot) continue;
-      for (const [tool, b] of Object.entries(days[day])) {
+    for (const [k, byTool] of Object.entries(src)) {
+      const i = idxOf(k);
+      if (i < 0) continue;
+      const slot = out[i];
+      for (const [tool, b] of Object.entries(byTool)) {
         const v = totalOf(b);
         if (prim.has(tool)) {
           if (!state.enabled.has(tool)) continue;
@@ -898,7 +1010,7 @@
         slot.total += v;
       }
     }
-    return [...map.values()];
+    return out;
   }
 
   function renderChart() {
@@ -911,9 +1023,9 @@
     // 概览数字
     let inp = 0, out = 0, cr = 0;
     const days = (state.usage && state.usage.days) || {};
-    const allowed = new Set(periodList(state.period, state.range).map((p) => p.key));
+    const win = dayWindow();
     for (const day of Object.keys(days)) {
-      if (!allowed.has(periodKeyOf(day, state.period))) continue;
+      if (win && (day < win.from || day > win.to)) continue;
       for (const [tool, b] of Object.entries(days[day])) {
         const on = prim.has(tool) ? state.enabled.has(tool) : state.other;
         if (!on) continue;
@@ -922,7 +1034,7 @@
     }
     $("t1").textContent = tok(grand);
     $("t1").nextElementSibling.textContent =
-      `近${state.range}${rangeUnit(state.period)} · ${num(data.filter((d) => d.total).length)} 个时间段有用量`;
+      `${rangeLabel(state.period, state.range)} · ${num(data.filter((d) => d.total).length)} 个时间段有用量`;
     $("t2").textContent = tok(inp);
     $("t2").nextElementSibling.textContent = "未命中缓存的输入";
     $("t3").textContent = tok(out);
@@ -932,7 +1044,7 @@
     $("t4").nextElementSibling.textContent = "命中率 " + hit.toFixed(1) + "%";
 
     $("wbChartDesc").textContent = enabled.length === 1
-      ? "仅 " + keyLabel(enabled[0]) + " · 按" + PERIOD_LABEL[state.period] : "";
+      ? "仅 " + keyLabel(enabled[0]) + " · 按" + UNIT_LABEL[trendSpec().unit] : "";
 
     // Y 轴
     $("wbY").innerHTML = [1, 0.5, 0].map((f) =>
@@ -991,6 +1103,8 @@
       $("wbBars").innerHTML = `<div class="flex h-full w-full items-center justify-center text-[12px] text-faint">
         这个区间没有用量记录</div>`;
     }
+
+    renderLineCharts();
   }
 
   function renderTableView(data, enabled) {
@@ -1043,6 +1157,302 @@
         <div class="w-[42px] shrink-0 text-right text-[11px] tabular-nums text-faint">${grand ? (v / grand * 100).toFixed(0) + "%" : "—"}</div>
       </div>`;
     }).join("");
+  }
+
+  // ---------- 折线图：模型 / 工具 ----------
+  const SERIES_SLOTS = 8;
+  const seriesColor = (slot) => slot < 0 ? "rgb(var(--c-series-other))"
+    : `rgb(var(--c-series-${slot + 1}))`;
+
+  function modelSlotMap() {
+    // 色位按模型累计用量固定：切日/周/月、换区间都不会换颜色
+    const totals = new Map();
+    for (const t of (state.usage && state.usage.tools) || []) {
+      for (const m of (t.models || [])) {
+        totals.set(m.model, (totals.get(m.model) || 0) + (m.tokens || 0));
+      }
+    }
+    const order = [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([m]) => m);
+    const map = new Map();
+    order.forEach((m, i) => { if (i < SERIES_SLOTS) map.set(m, i); });
+    return map;
+  }
+
+  function modelTrend() {
+    const { unit, slots } = trendSpec();
+    const perPeriod = slots.map(() => ({}));
+    const idxOf = slotIndexer(unit, slots);
+    const prim = new Set(primaryKeys());
+    for (const t of (state.usage && state.usage.tools) || []) {
+      if (!t.installed) continue;
+      const on = prim.has(t.key) ? state.enabled.has(t.key) : state.other;
+      if (!on) continue;
+      const src = unit === "hour" ? (t.model_hours || {}) : (t.model_days || {});
+      for (const [k, byModel] of Object.entries(src)) {
+        const i = idxOf(k);
+        if (i < 0) continue;
+        const slot = perPeriod[i];
+        for (const [m, v] of Object.entries(byModel)) {
+          slot[m] = (slot[m] || 0) + (Number(v) || 0);
+        }
+      }
+    }
+    const totals = new Map();
+    for (const slot of perPeriod) {
+      for (const [m, v] of Object.entries(slot)) totals.set(m, (totals.get(m) || 0) + v);
+    }
+    const ranked = [...totals.entries()].filter(([, v]) => v > 0)
+      .sort((a, b) => b[1] - a[1]);
+    const top = ranked.slice(0, 5);
+    const rest = ranked.slice(5);
+    const colorMap = modelSlotMap();
+    const taken = new Set();
+    const series = top.map(([name]) => {
+      let slot = colorMap.has(name) ? colorMap.get(name) : -1;
+      if (slot < 0 || taken.has(slot)) {
+        slot = 0;
+        while (taken.has(slot) && slot < SERIES_SLOTS - 1) slot++;
+      }
+      taken.add(slot);
+      return {
+        label: name, short: shortModel(name), color: seriesColor(slot),
+        values: perPeriod.map((s) => s[name] || 0),
+      };
+    });
+    if (rest.length) {
+      series.push({
+        label: `其他模型（${rest.length}）`, short: "其他模型",
+        color: seriesColor(-1),
+        values: perPeriod.map((s) => rest.reduce((a, [m]) => a + (s[m] || 0), 0)),
+      });
+    }
+    return {
+      labels: slots.map((s) => s.label),
+      series,
+      grand: ranked.reduce((a, [, v]) => a + v, 0),
+    };
+  }
+
+  function toolTrend() {
+    const data = seriesData();
+    const series = seriesKeys().map((k) => ({
+      label: keyLabel(k), short: keyLabel(k), color: keyColor(k),
+      values: data.map((s) => s.tools[k] || 0),
+    }));
+    series.sort((a, b) => b.values.reduce((x, y) => x + y, 0) - a.values.reduce((x, y) => x + y, 0));
+    return { labels: data.map((s) => s.label), series, grand: 0 };
+  }
+
+  function shortModel(name) {
+    const s = String(name || "").replace(/-\d{8}$/, "");
+    return s.length > 15 ? s.slice(0, 14) + "…" : s;
+  }
+
+  // 单调三次插值（Fritsch–Carlson）：曲线顺滑，且不会在 0 附近过冲到负值
+  function smoothPath(values, X, Y) {
+    const pts = values.map((v, i) => ({ x: X(i), y: Y(v) }));
+    const n = pts.length;
+    if (n < 2) return "";
+    const at = (p) => p.x.toFixed(1) + "," + p.y.toFixed(1);
+    if (n === 2) return "M" + at(pts[0]) + " L" + at(pts[1]);
+    const dx = [], slope = [];
+    for (let i = 0; i < n - 1; i++) {
+      dx[i] = pts[i + 1].x - pts[i].x;
+      slope[i] = dx[i] ? (pts[i + 1].y - pts[i].y) / dx[i] : 0;
+    }
+    const m = new Array(n);
+    m[0] = slope[0];
+    m[n - 1] = slope[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      if (slope[i - 1] * slope[i] <= 0) {
+        m[i] = 0;
+      } else {
+        const w1 = 2 * dx[i] + dx[i - 1];
+        const w2 = dx[i] + 2 * dx[i - 1];
+        m[i] = (w1 + w2) / (w1 / slope[i - 1] + w2 / slope[i]);
+      }
+    }
+    let d = "M" + at(pts[0]);
+    for (let i = 0; i < n - 1; i++) {
+      const c1x = pts[i].x + dx[i] / 3;
+      const c1y = pts[i].y + m[i] * dx[i] / 3;
+      const c2x = pts[i + 1].x - dx[i] / 3;
+      const c2y = pts[i + 1].y - m[i + 1] * dx[i] / 3;
+      d += " C" + c1x.toFixed(1) + "," + c1y.toFixed(1)
+        + " " + c2x.toFixed(1) + "," + c2y.toFixed(1)
+        + " " + at(pts[i + 1]);
+    }
+    return d;
+  }
+
+  function niceMax(v) {
+    if (!(v > 0)) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    const m = v / p;
+    const step = m <= 1 ? 1 : m <= 2 ? 2 : m <= 2.5 ? 2.5 : m <= 5 ? 5 : 10;
+    return step * p;
+  }
+
+  function renderLineChart(hostId, trend) {
+    const host = $(hostId);
+    if (!host) return;
+    const series = trend.series.filter(Boolean);
+    if (!series.length || !trend.labels.length) {
+      host.innerHTML = `<div class="py-12 text-center text-[12px] text-faint">这个区间没有用量记录</div>`;
+      host._lc = null;
+      return;
+    }
+    const w = Math.max(200, host.clientWidth || 300);
+    const h = 172, padT = 8, padB = 20, padL = 44;
+    const showEnd = series.length > 1 && series.length <= 4;
+    const padR = 10;
+    const plotW = Math.max(40, w - padL - padR);
+    const plotH = h - padT - padB;
+    const n = trend.labels.length;
+    const yMax = niceMax(Math.max(1, ...series.flatMap((s) => s.values)));
+    const X = (i) => padL + (n <= 1 ? plotW / 2 : (plotW * i) / (n - 1));
+    const Y = (v) => padT + plotH - (Math.min(v, yMax) / yMax) * plotH;
+
+    // 网格 + Y 轴刻度
+    let grid = "";
+    [1, 0.5, 0].forEach((f) => {
+      const y = padT + plotH * (1 - f);
+      grid += `<line class="line-grid" x1="${padL}" y1="${y}" x2="${padL + plotW}" y2="${y}"></line>
+        <text class="line-tick" x="${padL - 6}" y="${y + 3.5}" text-anchor="end">${tok(yMax * f)}</text>`;
+    });
+
+    // X 轴刻度
+    const xStep = Math.max(1, Math.ceil(n / (w < 560 ? 4 : 8)));
+    const xTicks = trend.labels.map((lb, i) => {
+      if (!(i % xStep === 0 || i === n - 1)) return "";
+      const anchor = n === 1 ? "middle" : i === 0 ? "start" : i === n - 1 ? "end" : "middle";
+      return `<text class="line-tick" x="${X(i)}" y="${h - 4}" text-anchor="${anchor}">${esc(lb)}</text>`;
+    }).join("");
+
+    // 折线（单调三次插值，顺滑且不会过冲）
+    const lines = series.map((s) => {
+      if (n === 1) {
+        return `<circle class="line-dot" cx="${X(0)}" cy="${Y(s.values[0])}" r="3"
+                  style="fill:${s.color}"></circle>`;
+      }
+      return `<path class="line-path" d="${smoothPath(s.values, X, Y)}"
+                style="stroke:${s.color}"></path>`;
+    }).join("");
+
+    // 直接标注线尾（≤4 条时画在图内），重叠时错开
+    let endLabels = "";
+    if (showEnd) {
+      const items = series.map((s) => ({ s, y: Y(s.values[n - 1]) }))
+        .filter((it) => it.s.values[n - 1] > 0)
+        .sort((a, b) => a.y - b.y);
+      const ys = items.map((it) => it.y);
+      for (let i = 1; i < ys.length; i++) ys[i] = Math.max(ys[i], ys[i - 1] + 12);
+      const over = ys.length ? ys[ys.length - 1] - (padT + plotH - 3) : 0;
+      for (let i = 0; i < ys.length; i++) {
+        if (over > 0) ys[i] -= over;
+        ys[i] = Math.max(padT + 8, ys[i]);
+      }
+      endLabels = items.map((it, i) =>
+        `<text class="line-endlabel" x="${padL + plotW - 4}" y="${ys[i].toFixed(1)}"
+               text-anchor="end">${esc(it.s.short || it.s.label)}</text>`).join("");
+    }
+
+    host.innerHTML = `
+      <svg class="line-svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" role="img"
+           aria-label="按${esc(String(series.length))}条系列的用量趋势">
+        ${grid}${xTicks}${lines}${endLabels}
+        <line class="line-cross d-none" x1="0" y1="${padT}" x2="0" y2="${padT + plotH}"></line>
+        <g class="line-hover-dots"></g>
+        <rect class="line-hit" x="${padL}" y="${padT}" width="${plotW}" height="${plotH}"
+              fill="transparent" tabindex="0" aria-label="用量趋势，左右方向键查看每个时间段"></rect>
+      </svg>
+      ${series.length > 1 ? renderLineLegend(trend) : ""}`;
+
+    host._lc = { host, series, labels: trend.labels, X, Y, padT, plotH, plotW, padL, n };
+
+    const hit = host.querySelector(".line-hit");
+    let idx = -1;
+    const paint = (i, cx, cy) => {
+      idx = i;
+      const cross = host.querySelector(".line-cross");
+      cross.classList.remove("d-none");
+      const x = X(i);
+      cross.setAttribute("x1", x);
+      cross.setAttribute("x2", x);
+      host.querySelector(".line-hover-dots").innerHTML = series.map((s) =>
+        `<circle cx="${x}" cy="${Y(s.values[i])}" r="3.5"
+           style="fill:${s.color};stroke:rgb(var(--c-surface));stroke-width:2"></circle>`).join("");
+      showLineTip(cx, cy, host._lc, i);
+    };
+    const at = (clientX) => {
+      const box = host.getBoundingClientRect();
+      const x = clientX - box.left - padL;
+      const i = n <= 1 ? 0 : Math.round(x / (plotW / (n - 1)));
+      return Math.max(0, Math.min(n - 1, i));
+    };
+    hit.addEventListener("mousemove", (e) => {
+      const i = at(e.clientX);
+      paint(i, e.clientX, e.clientY);
+    });
+    hit.addEventListener("mouseleave", () => {
+      host.querySelector(".line-cross").classList.add("d-none");
+      host.querySelector(".line-hover-dots").innerHTML = "";
+      hideTip();
+    });
+    hit.addEventListener("focus", () => {
+      const box = host.getBoundingClientRect();
+      const i = idx >= 0 ? idx : n - 1;
+      paint(i, box.left + X(i), box.top + padT + 10);
+    });
+    hit.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      e.preventDefault();
+      const box = host.getBoundingClientRect();
+      const cur = idx < 0 ? n - 1 : idx;
+      const i = Math.max(0, Math.min(n - 1, cur + (e.key === "ArrowRight" ? 1 : -1)));
+      paint(i, box.left + X(i), box.top + padT + 10);
+    });
+    hit.addEventListener("blur", () => {
+      host.querySelector(".line-cross").classList.add("d-none");
+      host.querySelector(".line-hover-dots").innerHTML = "";
+      hideTip();
+    });
+  }
+
+  function renderLineLegend(trend) {
+    const grand = trend.grand || trend.series.reduce((a, s) =>
+      a + s.values.reduce((x, y) => x + y, 0), 0);
+    return `<div class="mt-2 legend">${trend.series.map((s) => {
+      const v = s.values.reduce((a, b) => a + b, 0);
+      return `<span class="legend-item"><span class="line-swatch" style="background:${s.color}"></span>
+        ${esc(s.label)} <span class="legend-val">${tok(v)}</span>
+        <span class="text-faint">${grand ? (v / grand * 100).toFixed(1) + "%" : "—"}</span></span>`;
+    }).join("")}</div>`;
+  }
+
+  function showLineTip(cx, cy, lc, idx) {
+    const rows = lc.series.map((s) => ({ s, v: s.values[idx] }))
+      .filter((r) => r.v > 0)
+      .sort((a, b) => b.v - a.v)
+      .map((r) => `<div class="chart-tip-row"><span class="line-swatch" style="background:${r.s.color}"></span>
+        <span class="flex-1 text-muted">${esc(r.s.label)}</span><b>${tok(r.v)}</b></div>`).join("");
+    const total = lc.series.reduce((a, s) => a + s.values[idx], 0);
+    tip.innerHTML = `<div class="mb-1 text-[11px] font-semibold text-ink">${esc(lc.labels[idx])}</div>
+      ${rows || '<div class="text-faint">无用量</div>'}
+      <div class="mt-1 flex justify-between border-t border-line pt-1 text-[11px] text-muted">
+        合计 <b class="text-ink">${tok(total)}</b></div>`;
+    tip.classList.remove("d-none");
+    placeTip(cx, cy);
+  }
+
+  function renderLineCharts() {
+    if (!state.usage) return;
+    hideTip();
+    renderLineChart("wbModelChart", modelTrend());
+    renderLineChart("wbToolChart", toolTrend());
+    const unit = UNIT_LABEL[trendSpec().unit];
+    $("wbModelDesc").textContent = "按" + unit + " · 前 5 个模型，其余合并";
+    $("wbToolDesc").textContent = "按" + unit + " · 跟随上方工具筛选";
   }
 
   function renderModels() {
@@ -1102,10 +1512,13 @@
       <div class="mt-1 flex justify-between border-t border-line pt-1 text-[11px] text-muted">
         合计 <b class="text-ink">${tok(s.total)}</b></div>`;
     tip.classList.remove("d-none");
+    placeTip(e.clientX, e.clientY);
+  }
+  function placeTip(cx, cy) {
     const pad = 12, w = tip.offsetWidth, h = tip.offsetHeight;
-    let x = e.clientX + 14, y = e.clientY - h - 10;
-    if (x + w > innerWidth - pad) x = e.clientX - w - 14;
-    if (y < pad) y = e.clientY + 16;
+    let x = cx + 14, y = cy - h - 10;
+    if (x + w > innerWidth - pad) x = cx - w - 14;
+    if (y < pad) y = cy + 16;
     tip.style.left = x + "px";
     tip.style.top = y + "px";
   }
@@ -1126,20 +1539,29 @@
   $("wbBars").addEventListener("focusout", hideTip);
   window.addEventListener("scroll", hideTip, true);
 
+  // 折线图按容器实际宽度绘制，窗口变化时重画一次
+  let lcResizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(lcResizeTimer);
+    lcResizeTimer = setTimeout(() => {
+      if (state.usage && state.view === "workbench") renderLineCharts();
+    }, 120);
+  });
+
   $("wbPeriod").addEventListener("click", (e) => {
     const b = e.target.closest("[data-period]");
     if (!b) return;
     state.period = b.getAttribute("data-period");
     document.querySelectorAll("#wbPeriod .seg-btn").forEach((x) => x.classList.toggle("active", x === b));
     syncRangeUi();
-    renderChart();
+    renderWorkbench();
   });
   $("wbRange").addEventListener("click", (e) => {
     const b = e.target.closest("[data-range]");
     if (!b) return;
     state.range = Number(b.getAttribute("data-range"));
     syncRangeUi();
-    renderChart();
+    renderWorkbench();
   });
   $("wbMode").addEventListener("click", (e) => {
     const b = e.target.closest("[data-mode]");

@@ -9,8 +9,9 @@ import time
 
 from .. import core as sm
 from .. import usage as usage_mod
-from .base import (FileTrash, Provider, TRASH_NAME, add_bucket, cached_entry,
-                   day_key, new_bucket, to_epoch)
+from .base import (FileTrash, Provider, TRASH_NAME, add_bucket,
+                   add_usage_buckets, cached_entry, day_key, new_bucket,
+                   to_epoch)
 
 
 def _ns(root):
@@ -26,6 +27,9 @@ def parse_usage(path):
     totals = new_bucket()
     days = {}
     models = {}
+    mdays = {}
+    hours = {}
+    mhours = {}
     seen = {}
     users = asst = 0
     first_text = last_text = ""
@@ -70,13 +74,12 @@ def parse_usage(path):
         b["reasoning"] = int(det.get("thinking_tokens") or 0)
         b["requests"] = 1
         add_bucket(totals, b)
-        dk = day_key(ts) or ""
-        if dk:
-            add_bucket(days.setdefault(dk, new_bucket()), b)
-        add_bucket(models.setdefault(model, new_bucket()), b)
+        add_usage_buckets(days, models, mdays, ts, model, b, hours, mhours)
     sid = os.path.splitext(os.path.basename(path))[0]
     return {
         "sid": sid, "totals": totals, "days": days, "models": models,
+        "mdays": mdays,
+        "hours": hours, "mhours": mhours,
         "meta": {
             "users": users, "asst": asst,
             "first_text": first_text[:400], "last_text": last_text[:400],
