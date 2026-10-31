@@ -161,9 +161,22 @@ def count_lines(path: str) -> int:
     return n
 
 
+def sidecar_title(fpath: str) -> str:
+    """Claude Code 的 /rename 不进 .jsonl，而是写在同级目录
+    <会话 id>/custom-title.json 里；读不到就当没有。"""
+    side = os.path.join(os.path.splitext(fpath)[0], "custom-title.json")
+    try:
+        with open(side, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    return str((d or {}).get("customTitle") or "")
+
+
 def peek(fpath: str):
     """读文件头：cwd、标题（custom > ai > summary > 首条提问）、首个时间戳。"""
-    cwd = title_custom = title_ai = title_sum = first_text = ""
+    cwd = title_ai = title_sum = first_text = ""
+    title_custom = sidecar_title(fpath)
     first_ts = ""
     for line in read_chunk(fpath, 65536, from_end=False):
         d = parse_line(line)

@@ -814,6 +814,16 @@
       b.classList.toggle("active", b.getAttribute("data-tool") === view));
     // 回到工作台时整块重画：价目页可能刚改过币种或单价
     if (view === "workbench" && state.usage) requestAnimationFrame(renderWorkbench);
+    syncViewHash(view);
+  }
+
+  // 当前页面写进地址栏，F5 / 重开窗口时按它恢复，不用每次都回工作台
+  function syncViewHash(view) {
+    const h = (view === "tool" || view === "missing")
+      ? "#tool/" + encodeURIComponent(state.tool || "")
+      : (view === "prices" ? "#prices" : "#workbench");
+    if (location.hash === h) return;
+    try { history.replaceState(null, "", h); } catch (e) { location.hash = h; }
   }
 
   async function openTool(key) {
@@ -2938,8 +2948,18 @@
     } catch (e) {
       toast("读取工具列表失败", e.message, "err");
     }
-    showView("workbench");
-    await loadUsage(false);
+    // 刷新后回到原来的页面：工作台 / 价目 / 某个工具的会话列表
+    const m = location.hash.match(/^#tool\/(.+)$/);
+    if (location.hash === "#prices") {
+      showView("prices");
+      loadPrices();
+      if (!state.usage) loadUsage(false);
+    } else if (m && state.toolMap[decodeURIComponent(m[1])]) {
+      await openTool(decodeURIComponent(m[1]));
+    } else {
+      showView("workbench");
+      await loadUsage(false);
+    }
   })();
 })();
 </script>
