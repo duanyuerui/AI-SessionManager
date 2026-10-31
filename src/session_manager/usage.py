@@ -30,7 +30,9 @@ except ImportError:  # 直接跑脚本
                                 new_bucket)
 
 # 5 → 6：bucket 增加 input_off 等峰谷拆分键，旧缓存没有这些键
-CACHE_VERSION = 6
+# 6 → 7：Claude 记录按 message.id 区分中转（OpenAI 口径）与官方口径，
+#        中转的 input_tokens 要减掉缓存读，旧缓存里是没减过的数
+CACHE_VERSION = 7
 _CACHE_NAME = "usage-cache.json"
 _LOCK = threading.Lock()
 

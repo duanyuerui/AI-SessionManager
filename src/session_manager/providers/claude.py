@@ -26,6 +26,21 @@ def _ns(root):
 _MIN_REQ_SEC = 0.02
 _MAX_REQ_SEC = 600.0
 
+# 官方 Anthropic 接口的 input_tokens 不含缓存读；但 Claude Code 接第三方
+# OpenAI 兼容中转时，会话文件里的 usage 是 OpenAI 口径——input_tokens 就是
+# prompt_tokens，已经包含缓存读，不减掉会把「未命中缓存的输入」算成两倍。
+# 两种口径会混在同一个会话文件里，只能按每条记录的 message.id 逐条判断：
+# 中转返回的是 chatcmpl-xxx / resp_xxx，官方是 msg_xxx。
+_OPENAI_ID_PREFIXES = ("chatcmpl-", "resp_")
+
+
+def _uncached_input(mid, usage):
+    inp = int(usage.get("input_tokens") or 0)
+    cached = int(usage.get("cache_read_input_tokens") or 0)
+    if cached and str(mid or "").startswith(_OPENAI_ID_PREFIXES):
+        return max(0, inp - cached)
+    return inp
+
 
 def parse_usage(path):
     """一次遍历：token（按 message.id 去重）+ 首尾提问 + 消息数。
@@ -96,9 +111,9 @@ def parse_usage(path):
                     if not first_text:
                         first_text = txt
                     last_text = txt
-    for u, model, ts in seen.values():
+    for mid, (u, model, ts) in seen.items():
         b = new_bucket()
-        b["input"] = int(u.get("input_tokens") or 0)
+        b["input"] = _uncached_input(mid, u)
         b["cache_read"] = int(u.get("cache_read_input_tokens") or 0)
         b["cache_write"] = int(u.get("cache_creation_input_tokens") or 0)
         b["output"] = int(u.get("output_tokens") or 0)
