@@ -562,6 +562,92 @@ def _chromium():
     return None
 
 
+APP_WINDOW_TITLE = "AISessionManager"  # 页面 <title> 的前缀，用来认领窗口
+
+
+def _app_windows():
+    """当前所有客户端窗口：[(hwnd, pid, title)]，非 Windows 返回空列表。"""
+    if os.name != "nt":
+        return []
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+    except Exception:  # noqa: BLE001
+        return []
+
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND,
+                                     wintypes.LPARAM)
+    user32.EnumWindows.argtypes = [WNDENUMPROC, wintypes.LPARAM]
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND,
+                                                ctypes.POINTER(wintypes.DWORD)]
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR,
+                                     ctypes.c_int]
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR,
+                                      ctypes.c_int]
+
+    found = []
+
+    def _cb(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
+        if cls.value != "Chrome_WidgetWin_1":
+            return True
+        title = ctypes.create_unicode_buffer(256)
+        user32.GetWindowTextW(hwnd, title, 256)
+        if not title.value.startswith(APP_WINDOW_TITLE):
+            return True
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        found.append((hwnd, pid.value, title.value))
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_cb), 0)
+    return found
+
+
+def _show_maximized(hwnd):
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        user32 = ctypes.windll.user32
+        user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _maximize_window(proc, before, timeout=8.0):
+    """把客户端窗口最大化。
+
+    Chromium 的 --start-maximized 对 --app 窗口不生效，--window-size 也只是
+    初始尺寸，所以窗口出来后用 Win32 ShowWindow(SW_MAXIMIZE) 兜一下。
+    非 Windows 平台直接跳过（保持 --window-size 的尺寸）。
+
+    before 是启动前已有的窗口句柄：同一 profile 的 Edge 还在运行时，新进程
+    会把窗口交给已有浏览器后立刻退出，这时按 pid 找不到窗口，只能认领
+    启动后新出现的那一个。
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        wins = _app_windows()
+        owned = [hwnd for hwnd, pid, _t in wins if pid == proc.pid]
+        if owned:
+            for hwnd in owned:
+                _show_maximized(hwnd)
+            return
+        if proc.poll() is not None:
+            fresh = [hwnd for hwnd, _pid, _t in wins if hwnd not in before]
+            if fresh:
+                _show_maximized(fresh[0])  # EnumWindows 按 Z 序，新窗口在最前
+                return
+        time.sleep(0.2)
+
+
 def open_app_window(url, width=1280, height=860):
     """用浏览器的 --app 模式开一个没有地址栏/标签栏的窗口，像桌面客户端。
     找不到 Chromium 内核浏览器时返回 None。"""
@@ -599,11 +685,16 @@ def open_app_window(url, width=1280, height=860):
         "--no-first-run", "--no-default-browser-check",
         "--disable-background-mode",
     ] + lean_flags
+    before = {hwnd for hwnd, _pid, _t in _app_windows()}
     try:
-        return subprocess.Popen(args, stdout=subprocess.DEVNULL,
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL,
                                 stderr=subprocess.DEVNULL)
     except OSError:
         return None
+    # 窗口一出来就最大化（默认 1280×860 只是窗口还没出来时的尺寸）
+    threading.Thread(target=_maximize_window, args=(proc, before),
+                     daemon=True).start()
+    return proc
 
 
 def serve(root=None, port=8765, open_browser=True, app_window=False,

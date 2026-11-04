@@ -255,6 +255,8 @@ AI-SessionManager/
 
 客户端窗口用的是本机已装的 Edge / Chrome 的 `--app` 模式，不需要额外依赖：
 窗口用独立 profile（`%LOCALAPPDATA%\AISessionManager\app-profile-<端口>`，不碰日常浏览数据），
+打开时自动最大化（Chromium 的 `--start-maximized` 对 `--app` 窗口不生效，窗口出来后由
+服务端调 Win32 `ShowWindow(SW_MAXIMIZE)`），
 页面关闭时发一个 `/api/bye` 信标，3 秒内没有新请求服务就退出；刷新页面不会误关。
 机器上没有 Chromium 内核浏览器时退回默认浏览器，长时间没人访问（30 分钟）自动退出。
 
