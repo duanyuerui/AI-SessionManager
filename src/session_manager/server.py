@@ -648,6 +648,95 @@ def _maximize_window(proc, before, timeout=8.0):
         time.sleep(0.2)
 
 
+_INSTANCE_LOCK = [None]  # 单实例锁：Windows 是 mutex 句柄，POSIX 是文件对象
+
+
+def _claim_instance():
+    """占住单实例锁；已经有客户端实例在跑时返回 False。
+
+    锁跟着进程走：正常退出或崩溃，系统都会释放，不会留下死锁。
+    """
+    if os.name == "nt":
+        try:
+            import ctypes
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.CreateMutexW.restype = ctypes.c_void_p
+            kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                              ctypes.c_wchar_p]
+            handle = kernel32.CreateMutexW(
+                None, False, "Local\\AISessionManager.Single")
+            if not handle:
+                return True  # 拿不到锁就别拦人，照常启动
+            if ctypes.get_last_error() == 183:  # ERROR_ALREADY_EXISTS
+                kernel32.CloseHandle(ctypes.c_void_p(handle))
+                return False
+            _INSTANCE_LOCK[0] = handle
+            return True
+        except Exception:  # noqa: BLE001
+            return True
+    try:
+        import fcntl
+        cache = usage_mod.cache_dir()
+        os.makedirs(cache, exist_ok=True)
+        f = open(os.path.join(cache, "app-instance.lock"), "a+")
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _INSTANCE_LOCK[0] = f
+        return True
+    except OSError:
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _force_foreground(hwnd):
+    """把窗口最大化并切到前台。
+
+    Windows 有前台锁：后台进程直接 SetForegroundWindow 常常无效；
+    临时 AttachThreadInput 到当前前台窗口的线程再设置就能成功。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [
+            wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD,
+                                             wintypes.BOOL]
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        hwnd = wintypes.HWND(hwnd)
+        user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE，顺带还原最小化
+        user32.SetForegroundWindow(hwnd)
+        if user32.GetForegroundWindow() == hwnd:
+            return
+        fg = user32.GetForegroundWindow()
+        fg_tid = user32.GetWindowThreadProcessId(fg, None)
+        cur_tid = kernel32.GetCurrentThreadId()
+        user32.AttachThreadInput(cur_tid, fg_tid, True)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+        user32.AttachThreadInput(cur_tid, fg_tid, False)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _focus_app_window(timeout=8.0):
+    """把已经在跑的客户端窗口叫到最前面（最小化的还原并最大化）。"""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        wins = _app_windows()
+        if wins:
+            _force_foreground(wins[0][0])  # Z 序第一个就是最前面的窗口
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def open_app_window(url, width=1280, height=860):
     """用浏览器的 --app 模式开一个没有地址栏/标签栏的窗口，像桌面客户端。
     找不到 Chromium 内核浏览器时返回 None。"""
@@ -700,6 +789,11 @@ def open_app_window(url, width=1280, height=860):
 def serve(root=None, port=8765, open_browser=True, app_window=False,
           idle_exit=1800):
     global ROOT
+    # 客户端只留一个：已经开着就把已有窗口叫到前面，不再起第二个服务
+    if app_window and not _claim_instance():
+        _say("已有实例在运行，已切换到已有窗口")
+        _focus_app_window()
+        return 0
     if root:
         ROOT = os.path.abspath(os.path.expanduser(root))
     sm.setup_stdio()
