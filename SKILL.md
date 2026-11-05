@@ -45,7 +45,7 @@ python -m session_manager tools      # 命令行（需先 pip install -e $APP，
 | `dist\AISessionManager.exe` | **客户端版**：无控制台，独立窗口，关窗即退出 |
 | `dist\ClaudeSessionManager.exe` | **控制台版**：黑色窗口 + 默认浏览器 |
 | `python run.py` | **网页界面**：左侧菜单切换工具，工作台看 Token，勾选删除、回收站恢复 |
-| `python run.py --app` | 同客户端版（浏览器 `--app` 模式，无地址栏） |
+| `python run.py --app` | 同客户端版（原生窗口，关窗即退出） |
 | `python -m session_manager tools` | 扫描本机：各工具是否安装、会话数、占用、Token |
 | `python -m session_manager tools --scan` | 强制重新扫描（默认 30 秒缓存） |
 | `python -m session_manager usage --period week` | Token 用量看板（`day` / `week` / `month` / `year`） |
@@ -78,7 +78,7 @@ python -m session_manager tools      # 命令行（需先 pip install -e $APP，
 
 ```bash
 python run.py                  # 启动并自动打开浏览器（默认 http://127.0.0.1:8765）
-python run.py --app            # 以客户端窗口打开（Edge/Chrome --app，关窗即退出）
+python run.py --app            # 以客户端窗口打开（原生窗口，关窗即退出）
 python run.py --port 8899      # 换端口（占用会自动往后找）
 python run.py --no-browser     # 只起服务
 ```

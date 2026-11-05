@@ -348,8 +348,30 @@ def save_prices(body):
 # ---------- HTTP ----------
 
 LAST_HIT = [0.0]  # 最后一次请求时间（客户端模式用来判断窗口是不是已经关了）
-CLOSE_AT = [0.0]  # 页面离开时间（客户端窗口关闭时由页面发 /api/bye）
+CLOSE_AT = [0.0]  # 页面离开时间（回退浏览器窗口时由页面发 /api/bye）
 APP_MODE = [False]  # 是否以「客户端窗口」方式启动
+WINDOW = [None]  # pywebview 原生窗口
+
+# WebView2 的精简参数（本地单页应用用不到后台服务/扩展/GPU）
+_WEBVIEW2_ARGS = " ".join([
+    "--disable-gpu",
+    "--in-process-gpu",
+    "--disable-extensions",
+    "--disable-sync",
+    "--disable-component-update",
+    "--disable-background-networking",
+    "--disable-breakpad",
+    "--disable-client-side-phishing-detection",
+    "--disable-default-apps",
+    "--no-service-autorun",
+    "--metrics-recording-only",
+    "--process-per-site",
+    "--renderer-process-limit=1",
+    "--js-flags=--max-old-space-size=128",
+    "--disable-component-extensions-with-background-pages",
+    "--disable-features=msEdgeSearchIndexer,msEdgeSidebarV2,Translate,"
+    "OptimizationHints,MediaRouter",
+])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -529,6 +551,74 @@ def _say(msg):
         pass
 
 
+def _set_aumid(app_id="AISessionManager"):
+    """给本进程一个独立 AppUserModelID：任务栏图标/固定都用应用自己的。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _app_icon_path():
+    """窗口图标：打包后在 _MEIPASS，开发时用仓库根目录的 ico.ico。"""
+    cands = []
+    frozen = getattr(sys, "_MEIPASS", None)
+    if frozen:
+        cands.append(os.path.join(frozen, "ico.ico"))
+    cands.append(os.path.join(os.path.dirname(os.path.dirname(HERE)), "ico.ico"))
+    for p in cands:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def _serve_http(httpd):
+    try:
+        httpd.serve_forever()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def run_native_window(url):
+    """pywebview 原生窗口；返回 True 表示窗口生命周期已处理。
+
+    返回 False 表示 pywebview 不可用/启动失败，调用方回退到浏览器窗口。
+    HTTP 服务由调用方在后台线程启动，这里只负责窗口。
+    """
+    os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                          _WEBVIEW2_ARGS)
+    try:
+        import webview
+    except Exception as e:  # noqa: BLE001
+        _say("pywebview 不可用，回退浏览器窗口: %s" % e)
+        return False
+    _set_aumid()
+    try:
+        win = webview.create_window(
+            "AISessionManager · 会话与 Token", url + "?app=1",
+            width=1280, height=860, min_size=(980, 640),
+            maximized=True, background_color="#F4F5F7")
+    except Exception as e:  # noqa: BLE001
+        _say("创建原生窗口失败，回退浏览器窗口: %s" % e)
+        return False
+    WINDOW[0] = win
+    tag = url.rsplit(":", 1)[-1]
+    try:
+        webview.start(icon=_app_icon_path(), gui="edgechromium",
+                      private_mode=False,
+                      storage_path=os.path.join(usage_mod.cache_dir(),
+                                                "webview-%s" % tag))
+    except Exception as e:  # noqa: BLE001
+        _say("原生窗口运行失败，回退浏览器窗口: %s" % e)
+        WINDOW[0] = None
+        return False
+    WINDOW[0] = None
+    return True
+
+
 def _chromium():
     """找支持 --app 的 Chromium 内核浏览器（Edge / Chrome 都行）。"""
     cands = []
@@ -562,11 +652,48 @@ def _chromium():
     return None
 
 
-APP_WINDOW_TITLE = "AISessionManager"  # 页面 <title> 的前缀，用来认领窗口
+APP_WINDOW_TITLE = "AISessionManager"  # 窗口标题前缀，用来认领客户端窗口
+_APP_PROCESS_NAMES = ("aisessionmanager.exe", "claudesessionmanager.exe",
+                      "python.exe", "pythonw.exe")
+
+
+def _process_name(pid):
+    """进程映像文件名（小写）；拿不到时返回空串。"""
+    if os.name != "nt":
+        return ""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL,
+                                         wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+            ctypes.POINTER(wintypes.DWORD)]
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        h = kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+        if not h:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            n = wintypes.DWORD(1024)
+            if not kernel32.QueryFullProcessImageNameW(
+                    h, 0, buf, ctypes.byref(n)):
+                return ""
+            return os.path.basename(buf.value).lower()
+        finally:
+            kernel32.CloseHandle(h)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _app_windows():
-    """当前所有客户端窗口：[(hwnd, pid, title)]，非 Windows 返回空列表。"""
+    """当前所有客户端窗口：[(hwnd, pid, title)]，非 Windows 返回空列表。
+
+    兼容两种窗口：pywebview 原生窗口（WinForms，按进程名认领）和回退模式
+    下 Edge/Chrome 的 --app 窗口（按窗口类认领）。
+    """
     if os.name != "nt":
         return []
     try:
@@ -592,16 +719,17 @@ def _app_windows():
     def _cb(hwnd, _lparam):
         if not user32.IsWindowVisible(hwnd):
             return True
-        cls = ctypes.create_unicode_buffer(64)
-        user32.GetClassNameW(hwnd, cls, 64)
-        if cls.value != "Chrome_WidgetWin_1":
-            return True
         title = ctypes.create_unicode_buffer(256)
         user32.GetWindowTextW(hwnd, title, 256)
         if not title.value.startswith(APP_WINDOW_TITLE):
             return True
+        cls = ctypes.create_unicode_buffer(64)
+        user32.GetClassNameW(hwnd, cls, 64)
         pid = wintypes.DWORD()
         user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        native = _process_name(pid.value) in _APP_PROCESS_NAMES
+        if cls.value != "Chrome_WidgetWin_1" and not native:
+            return True
         found.append((hwnd, pid.value, title.value))
         return True
 
@@ -818,65 +946,96 @@ def serve(root=None, port=8765, open_browser=True, app_window=False,
     _say("缓存目录:   %s" % usage_mod.cache_dir())
     _say("按 Ctrl+C 退出（直接关闭这个窗口也可以）")
 
-    proc = None
     if app_window:
         APP_MODE[0] = True
-        proc = open_app_window(url)
-        if proc is None:
-            # 没有 Edge / Chrome：退回默认浏览器
-            open_browser = True
-        else:
-            open_browser = False  # 已经有客户端窗口了，别再开一个浏览器
+        # 原生窗口和浏览器回退都需要 HTTP 在后台跑
+        http_thread = threading.Thread(target=_serve_http, args=(httpd,),
+                                       daemon=True)
+        http_thread.start()
+        try:
+            if run_native_window(url):
+                return 0
 
-        # 页面关闭时会发 /api/bye；3 秒内没有新请求才真的退出（刷新页面不算关闭）
-        def _watch_close():
-            while True:
-                time.sleep(1)
-                t = CLOSE_AT[0]
-                if t and time.time() - t > 3 and LAST_HIT[0] <= t:
+            # ---------- 回退：Chromium --app 窗口 ----------
+            proc = open_app_window(url)
+            if proc is None:
+                # 没有 Edge / Chrome / pywebview：退回默认浏览器
+                open_browser = True
+            else:
+                open_browser = False  # 已经有客户端窗口了，别再开一个浏览器
+
+                # 页面关闭时会发 /api/bye；3 秒内没有新请求才真的退出（刷新页面不算关闭）
+                def _watch_close():
+                    while True:
+                        time.sleep(1)
+                        t = CLOSE_AT[0]
+                        if t and time.time() - t > 3 and LAST_HIT[0] <= t:
+                            try:
+                                httpd.shutdown()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            return
+
+                threading.Thread(target=_watch_close, daemon=True).start()
+
+            if open_browser:
+                try:
+                    webbrowser.open(url)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if proc is not None:
+                # 窗口一关，浏览器进程就退出 → 服务跟着停，不留后台进程
+                def _watch_window():
+                    time.sleep(2.5)
+                    # Edge 已经在运行时，新窗口会交给已有进程，Popen 会立刻退出：
+                    # 这种情况交给上面的 /api/bye 判断，别据此关服务
+                    if proc.poll() is not None:
+                        return
+                    try:
+                        proc.wait()
+                    except Exception:  # noqa: BLE001
+                        pass
                     try:
                         httpd.shutdown()
                     except Exception:  # noqa: BLE001
                         pass
-                    return
-        threading.Thread(target=_watch_close, daemon=True).start()
+
+                threading.Thread(target=_watch_window, daemon=True).start()
+            elif idle_exit:
+                # 退回默认浏览器时感知不到窗口关闭：长时间没人访问就自己退出
+                LAST_HIT[0] = time.time()
+
+                def _watch_idle():
+                    while True:
+                        time.sleep(60)
+                        if time.time() - LAST_HIT[0] > idle_exit:
+                            try:
+                                httpd.shutdown()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            return
+
+                threading.Thread(target=_watch_idle, daemon=True).start()
+
+            http_thread.join()
+            return 0
+        except KeyboardInterrupt:
+            _say("\n已退出")
+            return 0
+        finally:
+            try:
+                httpd.shutdown()
+            except Exception:  # noqa: BLE001
+                pass
+            http_thread.join(timeout=5)
+            httpd.server_close()
 
     if open_browser:
         try:
             webbrowser.open(url)
         except Exception:  # noqa: BLE001
             pass
-    if proc is not None:
-        # 窗口一关，浏览器进程就退出 → 服务跟着停，不留后台进程
-        def _watch_window():
-            time.sleep(2.5)
-            # Edge 已经在运行时，新窗口会交给已有进程，Popen 会立刻退出：
-            # 这种情况交给上面的 /api/bye 判断，别据此关服务
-            if proc.poll() is not None:
-                return
-            try:
-                proc.wait()
-            except Exception:  # noqa: BLE001
-                pass
-            try:
-                httpd.shutdown()
-            except Exception:  # noqa: BLE001
-                pass
-        threading.Thread(target=_watch_window, daemon=True).start()
-    elif app_window and idle_exit:
-        # 退回默认浏览器时感知不到窗口关闭：长时间没人访问就自己退出
-        LAST_HIT[0] = time.time()
-
-        def _watch_idle():
-            while True:
-                time.sleep(60)
-                if time.time() - LAST_HIT[0] > idle_exit:
-                    try:
-                        httpd.shutdown()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    return
-        threading.Thread(target=_watch_idle, daemon=True).start()
 
     try:
         httpd.serve_forever()
@@ -895,7 +1054,7 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=8765, help="端口，默认 8765")
     ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     ap.add_argument("--app", action="store_true",
-                    help="用独立客户端窗口打开（Chromium 的 --app 模式）")
+                    help="用独立客户端窗口打开（pywebview 原生窗口）")
     a = ap.parse_args(argv)
     return serve(a.root, a.port, not a.no_browser, app_window=a.app)
 

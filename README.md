@@ -9,10 +9,11 @@ Goose、Amp、Crush……），格式还没吃透的先以「只读发现」展�
 左侧菜单随时切换，能搜索、看详情、删除（先进回收站）、批量清理、看磁盘占用；
 「工作台」把所有工具的 Token 用量按天 / 周 / 月 / 年汇总，支持按工具、按模型拆分。
 
-零第三方依赖，只用 Python 3.8+ 标准库；也可以直接双击 exe，不用装 Python：
+零第三方依赖，服务与网页界面只用 Python 3.8+ 标准库；客户端窗口用 pywebview + WebView2
+（缺失时自动回退浏览器 `--app`）。也可以直接双击 exe，不用装 Python：
 
 - `dist\AISessionManager.exe` — **客户端版**：没有黑色控制台窗口，
-  用 Edge/Chrome 的 `--app` 模式打开一个独立窗口（无地址栏 / 标签栏），
+  用 pywebview 原生窗口（WebView2）打开，任务栏图标/固定项都是应用自己的，
   关掉窗口服务就退出，不留后台进程。
 - `dist\ClaudeSessionManager.exe` — **控制台版**：保留黑色窗口，启动后打开默认浏览器。
 
@@ -73,7 +74,7 @@ Goose、Amp、Crush……），格式还没吃透的先以「只读发现」展�
 
 ```bash
 python run.py                   # 起网页界面并自动打开浏览器（默认 http://127.0.0.1:8765）
-python run.py --app             # 以客户端窗口打开（无地址栏，关窗即退出）
+python run.py --app             # 以客户端窗口打开（原生窗口，关窗即退出）
 python run.py --port 8899       # 换端口（被占用会自动往后找）
 python run.py --no-browser      # 只起服务
 ```
@@ -253,13 +254,14 @@ AI-SessionManager/
 
 界面资源在运行时按「开发目录 → PyInstaller 解包目录（`sys._MEIPASS`）」查找。
 
-客户端窗口用的是本机已装的 Edge / Chrome 的 `--app` 模式，不需要额外依赖：
-窗口用独立 profile（`%LOCALAPPDATA%\AISessionManager\app-profile-<端口>`，不碰日常浏览数据），
-打开时自动最大化（Chromium 的 `--start-maximized` 对 `--app` 窗口不生效，窗口出来后由
-服务端调 Win32 `ShowWindow(SW_MAXIMIZE)`），
-并且同时只保留一个实例：重复双击 exe 不会开第二个窗口，而是把已开的窗口还原、最大化并切到前台。
-页面关闭时发一个 `/api/bye` 信标，3 秒内没有新请求服务就退出；刷新页面不会误关。
-机器上没有 Chromium 内核浏览器时退回默认浏览器，长时间没人访问（30 分钟）自动退出。
+客户端窗口用 pywebview + 系统自带的 WebView2 运行时开一个真正的原生窗口：
+窗口属于 `AISessionManager.exe`，任务栏图标和固定项都是应用自己的，不再显示成 Edge；
+浏览器数据放在 `%LOCALAPPDATA%\AISessionManager\webview-<端口>`，不碰日常浏览数据。
+窗口默认最大化，并且同时只保留一个实例：重复双击 exe 不会开第二个窗口，而是把已开的
+窗口还原、最大化并切到前台。关掉窗口服务就退出，不留后台进程。
+
+pywebview 或 WebView2 不可用时自动回退到 Edge/Chrome 的 `--app` 模式（独立 profile），
+再没有 Chromium 内核浏览器就退回默认浏览器，长时间没人访问（30 分钟）自动退出。
 
 ### 加一个新工具
 
@@ -305,8 +307,9 @@ python -m PyInstaller --noconfirm --clean ClaudeSessionManager.spec
 # 产物：dist\AISessionManager.exe（客户端版）+ dist\ClaudeSessionManager.exe（控制台版）
 ```
 
-spec 里已经把 `src/session_manager/webui` 作为数据目录打进去，并把新增的 provider 模块
-写进 `hiddenimports`；两个 exe 共用同一份代码，只是 `console=` 不同。
+spec 里已经把 `src/session_manager/webui` 和 `ico.ico` 作为数据打进去，并把新增的 provider
+模块、pywebview/pythonnet 写进 `hiddenimports`；两个 exe 共用同一份代码，只是 `console=` 不同。
+客户端窗口用系统自带的 WebView2 运行时（Windows 11 自带；Windows 10 随 Edge 安装）。
 图标来自根目录的 `ico.svg`，exe 用的是 `ico.ico`（16–256 多尺寸），网页和客户端窗口的
 favicon 用 `src/session_manager/webui/vendor/icon.svg`。换了图标后需要重新生成 ico：
 

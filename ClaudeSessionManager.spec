@@ -12,7 +12,10 @@ a = Analysis(
     [str(ROOT / "run.py")],
     pathex=[str(ROOT / "src")],
     binaries=[],
-    datas=[(str(ROOT / "src" / "session_manager" / "webui"), "webui")],
+    datas=[
+        (str(ROOT / "src" / "session_manager" / "webui"), "webui"),
+        (str(ROOT / "ico.ico"), "."),
+    ],
     hiddenimports=[
         "session_manager.core", "session_manager.server",
         "session_manager.usage", "session_manager.pricing",
@@ -28,6 +31,10 @@ a = Analysis(
         "session_manager.providers.discovery",
         "session_manager.providers.workbuddy",
         "session_manager.providers.zcode",
+        "webview",
+        "webview.platforms.winforms",
+        "clr",
+        "clr_loader",
     ],
     hookspath=[],
     runtime_hooks=[],
